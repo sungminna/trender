@@ -1,0 +1,20 @@
+{"timestamp":"2025-06-19T15:13:58.893308","level":"info","event":"DAG bundles loaded: dags-folder","logger":"airflow.dag_processing.bundles.manager.DagBundlesManager"}
+{"timestamp":"2025-06-19T15:13:58.893520","level":"info","event":"Filling up the DagBag from /opt/airflow/dags/crtest.py","logger":"airflow.models.dagbag.DagBag"}
+{"timestamp":"2025-06-19T15:14:05.374470Z","level":"info","event":"Found 11 elements with selector: [data-v-dea72308] li a span","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.379886Z","level":"info","event":"1. 나재견","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.385024Z","level":"info","event":"2. 성영탁","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.389215Z","level":"info","event":"3. 이란","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.391675Z","level":"info","event":"4. 28년 후","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.394617Z","level":"info","event":"5. 아스카 키라라","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.399676Z","level":"info","event":"6. 주학년","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.403390Z","level":"info","event":"7. 스커크","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.406436Z","level":"info","event":"8. 렌(메이플스토리)","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.410972Z","level":"info","event":"9. 발낳대","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.415033Z","level":"info","event":"10. 우왁굳/논란 및 사건 사고","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.418550Z","level":"info","event":"11. 나재견","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.418639Z","level":"info","event":"","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.418667Z","level":"info","event":"Total trending keywords found: 11","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.418714Z","level":"info","event":"Unique keywords: ['성영탁', '주학년', '렌(메이플스토리)', '28년 후', '아스카 키라라', '우왁굳/논란 및 사건 사고', '발낳대', '이란', '나재견', '스커크']","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.421104Z","level":"info","event":"Page title: 나무위키:대문 - 나무위키","chan":"stdout","logger":"task"}
+{"timestamp":"2025-06-19T15:14:05.478358","level":"info","event":"Done. Returned value was: ['나재견', '성영탁', '이란', '28년 후', '아스카 키라라', '주학년', '스커크', '렌(메이플스토리)', '발낳대', '우왁굳/논란 및 사건 사고', '나재견']","logger":"airflow.task.operators.airflow.providers.standard.operators.python.PythonOperator"}
+{"timestamp":"2025-06-19T15:14:05.478512","level":"info","event":"Pushing xcom","ti":"RuntimeTaskInstance(id=UUID('019788c0-fa55-7eb0-851b-27d8bf464cb6'), task_id='run_playwright', dag_id='crtest', run_id='manual__2025-06-19T15:13:57.832313+00:00', try_number=1, map_index=-1, hostname='39f67b49ff4a', context_carrier={}, task=<Task(PythonOperator): run_playwright>, bundle_instance=LocalDagBundle(name=dags-folder), max_tries=0, start_date=datetime.datetime(2025, 6, 19, 15, 13, 58, 827565, tzinfo=TzInfo(UTC)), end_date=None, state=<TaskInstanceState.RUNNING: 'running'>, is_mapped=False, rendered_map_index=None)","logger":"task"}
