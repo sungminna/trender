@@ -9,7 +9,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from super_agent import research_agent, reload_research_agent, get_available_prompts
+from agents.super_agent import research_agent, reload_research_agent, get_available_prompts
 from utils.prompt_loader import get_prompt, prompt_loader
 
 

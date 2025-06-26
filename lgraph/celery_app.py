@@ -3,7 +3,7 @@ from datetime import datetime
 import os
 from sqlalchemy.orm import sessionmaker
 from database import engine, PodcastTask, AgentResult, TaskStatus, AgentType, TTSResult, TTSStatus
-from super_agent import supervisor
+from agents.super_agent import supervisor
 from langchain_core.messages import convert_to_messages
 from tts import get_tts_generator
 import json
@@ -151,17 +151,14 @@ def process_podcast_task(self, task_id: int, user_request: str):
                     # 스크립트 정제
                     cleaned_script = _clean_tts_script(final_tts_script)
                     
-                    # 음원 파일 경로 생성
-                    audio_file_path, audio_file_name = _generate_audio_file_path(task_id, user_request)
-                    
-                    # TTS 결과 저장 (PENDING 상태로)
+                    # TTS 결과 저장 (PENDING 상태로, 파일 경로는 나중에 설정)
                     tts_result = TTSResult(
                         task_id=task_id,
                         user_request=user_request,
                         script_content=cleaned_script,
                         raw_script=final_tts_script,  # 원본 백업
-                        audio_file_path=audio_file_path,
-                        audio_file_name=audio_file_name,
+                        audio_file_path="",  # 나중에 설정
+                        audio_file_name="",  # 나중에 설정
                         is_audio_generated="false",
                         tts_status=TTSStatus.PENDING  # 스크립트만 저장된 상태
                     )
@@ -171,9 +168,18 @@ def process_podcast_task(self, task_id: int, user_request: str):
                     db.refresh(tts_result)  # ID 가져오기
                     tts_result_id = tts_result.id
                     
+                    # TTS ID가 있으므로 이제 파일 경로 생성 가능
+                    audio_file_path, audio_file_name = _generate_audio_file_path(tts_result_id, task_id, user_request)
+                    
+                    # 파일 경로 업데이트
+                    tts_result.audio_file_path = audio_file_path
+                    tts_result.audio_file_name = audio_file_name
+                    db.commit()
+                    
                     print(f"🎙️ TTS 스크립트 저장 완료 (ID: {tts_result_id})")
                     print(f"   - 스크립트 길이: {len(cleaned_script)} 문자")
                     print(f"   - 예정 음원 파일: {audio_file_name}")
+                    print(f"   - 파일명 형식: tts_id_주제_task_id.wav")
                     
                 except Exception as tts_save_error:
                     print(f"⚠️ TTS 결과 저장 실패: {tts_save_error}")
@@ -325,14 +331,18 @@ def _extract_final_tts_script(final_messages: list) -> str:
     return script_content
 
 
-def _generate_audio_file_path(task_id: int, user_request: str) -> tuple:
-    """음원 파일 경로와 파일명을 생성합니다."""
-    # 사용자 요청에서 안전한 파일명 생성
-    safe_request = "".join(c for c in user_request[:50] if c.isalnum() or c in (' ', '-', '_')).rstrip()
+def _generate_audio_file_path(tts_id: int, task_id: int, user_request: str) -> tuple:
+    """음원 파일 경로와 파일명을 생성합니다. 형식: tts_id_주제_task_id.wav"""
+    # 사용자 요청에서 안전한 파일명 생성 (주제 부분)
+    safe_request = "".join(c for c in user_request[:30] if c.isalnum() or c in (' ', '-', '_')).rstrip()
     safe_request = safe_request.replace(' ', '_')
     
-    # 파일명 생성
-    filename = f"podcast_task_{task_id}_{safe_request}.mp3"
+    # 빈 문자열이면 기본값 설정
+    if not safe_request:
+        safe_request = "podcast"
+    
+    # 파일명 생성: tts_id_주제_task_id.wav
+    filename = f"{tts_id}_{safe_request}_{task_id}.wav"
     
     # 파일 저장 경로 (환경변수로 설정 가능)
     audio_base_dir = os.getenv("AUDIO_STORAGE_PATH", "/app/audio_files")
