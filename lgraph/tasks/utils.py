@@ -76,29 +76,13 @@ def _clean_tts_script(script_content: str) -> str:
     return cleaned.strip()
 
 
-def _extract_tts_script_from_messages(messages: list) -> str:
-    """메시지 리스트에서 TTS 스크립트를 추출합니다."""
-    script_parts = []
-    
-    for msg in messages:
-        if isinstance(msg, dict):
-            content = msg.get("content", "")
-        else:
-            content = getattr(msg, 'content', str(msg))
-        
-        if content and isinstance(content, str):
-            script_parts.append(content)
-    
-    return "\n".join(script_parts)
-
-
-def _extract_final_tts_script(final_messages: list) -> str:
-    """supervisor agent의 가장 마지막 출력에서 TTS 스크립트를 추출합니다."""
+def _extract_raw_final_script(final_messages: list) -> str:
+    """supervisor agent의 가장 마지막 출력에서 원본(raw) 스크립트를 추출합니다."""
     if not final_messages:
         return ""
     
     # 가장 마지막 메시지에서 스크립트 추출
-    last_message = None
+    last_message_content = ""
     for msg in reversed(final_messages):  # 뒤에서부터 검색
         if isinstance(msg, dict):
             content = msg.get("content", "")
@@ -107,22 +91,18 @@ def _extract_final_tts_script(final_messages: list) -> str:
         
         # 내용이 있고 충분히 긴 경우 (실제 스크립트로 판단)
         if content and isinstance(content, str) and len(content.strip()) > 50:
-            last_message = content
+            last_message_content = content
             break
     
-    if not last_message:
+    if not last_message_content:
         print("⚠️ supervisor의 마지막 출력에서 유효한 스크립트를 찾을 수 없습니다.")
         return ""
     
-    # 마지막 [TTS_SCRIPT_COMPLETE] 마커만 제거
-    script_content = last_message.replace("[TTS_SCRIPT_COMPLETE]", "").strip()
+    print(f"📝 supervisor 마지막 출력에서 원본 스크립트 추출 완료:")
+    print(f"   - 원본 메시지 길이: {len(last_message_content)} 문자")
+    print(f"   - 스크립트 미리보기: {last_message_content[:100]}...")
     
-    print(f"📝 supervisor 마지막 출력에서 TTS 스크립트 추출 완료:")
-    print(f"   - 원본 메시지 길이: {len(last_message)} 문자")
-    print(f"   - 정제된 스크립트 길이: {len(script_content)} 문자")
-    print(f"   - 스크립트 미리보기: {script_content[:100]}...")
-    
-    return script_content
+    return last_message_content
 
 
 def _generate_audio_object_name(tts_id: int, task_id: int, user_request: str) -> str:

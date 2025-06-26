@@ -3,13 +3,13 @@
 """
 
 from celery import Celery
-import os
+from config import settings
 
 # 공통 Celery 앱 인스턴스
 celery_app = Celery(
     "lgraph",
-    broker=os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0"),
-    backend=os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0"),
+    broker=settings.CELERY_BROKER_URL,
+    backend=settings.CELERY_RESULT_BACKEND,
 )
 
 # Celery 설정

@@ -12,7 +12,7 @@ from .utils import (
     get_db, 
     _serialize_message, 
     _get_agent_type, 
-    _extract_final_tts_script, 
+    _extract_raw_final_script, 
     _clean_tts_script,
     _generate_audio_object_name,
     handle_task_error
@@ -38,7 +38,7 @@ def process_podcast_task(self, task_id: int, user_request: str):
             agent_results_batch = []
             agent_execution_count = {}  # 에이전트별 실행 횟수 추적
             final_messages = []
-            final_tts_script = ""  # 멀티 에이전트 최종 TTS 스크립트
+            raw_final_script = ""  # 멀티 에이전트 최종 TTS 스크립트
             
             # 슈퍼바이저 실행
             print(f"🎯 Korean Podcast Production Pipeline 시작... (Task ID: {task_id})")
@@ -118,14 +118,14 @@ def process_podcast_task(self, task_id: int, user_request: str):
                 db.add_all(agent_results_batch)
                 print(f"💾 {len(agent_results_batch)}개 에이전트 결과 일괄 저장")
             
-            # 멀티 에이전트 파이프라인의 최종 결과에서 TTS 스크립트 추출
-            print(f"🔍 멀티 에이전트 최종 결과에서 TTS 스크립트 추출 중...")
-            final_tts_script = _extract_final_tts_script(final_messages)
+            # 멀티 에이전트 파이프라인의 최종 결과에서 원본 TTS 스크립트 추출
+            print(f"🔍 멀티 에이전트 최종 결과에서 원본 TTS 스크립트 추출 중...")
+            raw_final_script = _extract_raw_final_script(final_messages)
             
             # TTS 결과 저장 (스크립트만 저장, 음원은 아직 생성 안됨)
             tts_result_id = None
-            if final_tts_script:
-                tts_result_id = _save_tts_script(db, task_id, user_request, final_tts_script)
+            if raw_final_script:
+                tts_result_id = _save_tts_script(db, task_id, user_request, raw_final_script)
             
             # 최종 결과 저장
             final_result = {
@@ -133,7 +133,7 @@ def process_podcast_task(self, task_id: int, user_request: str):
                 "completed_at": datetime.utcnow().isoformat(),
                 "total_agent_executions": len(agent_results_batch),
                 "agent_execution_summary": agent_execution_count,
-                "tts_script_available": bool(final_tts_script),
+                "tts_script_available": bool(raw_final_script),
                 "tts_result_id": tts_result_id
             }
             
@@ -173,18 +173,18 @@ def process_podcast_task(self, task_id: int, user_request: str):
             raise Exception(f"Task {task_id} failed: {error_info['error_message']}")
 
 
-def _save_tts_script(db, task_id: int, user_request: str, final_tts_script: str) -> int:
+def _save_tts_script(db, task_id: int, user_request: str, raw_script: str) -> int:
     """TTS 스크립트를 데이터베이스에 저장하고 TTS 결과 ID를 반환합니다."""
     try:
         # 스크립트 정제
-        cleaned_script = _clean_tts_script(final_tts_script)
+        cleaned_script = _clean_tts_script(raw_script)
         
         # TTS 결과 저장 (PENDING 상태로, 파일 경로는 나중에 설정)
         tts_result = TTSResult(
             task_id=task_id,
             user_request=user_request,
             script_content=cleaned_script,
-            raw_script=final_tts_script,  # 원본 백업
+            raw_script=raw_script,  # 원본 백업
             audio_file_path="",  # 나중에 설정
             audio_file_name="",  # 나중에 설정
             is_audio_generated="false",

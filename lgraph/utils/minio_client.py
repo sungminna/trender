@@ -10,17 +10,18 @@ from typing import Optional, BinaryIO
 from minio import Minio
 from minio.error import S3Error
 from datetime import datetime, timedelta
+from config import settings
 
 
 class MinIOClient:
     """MinIO 객체 스토리지 클라이언트"""
     
     def __init__(self):
-        self.endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-        self.access_key = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-        self.secret_key = os.getenv("MINIO_SECRET_KEY", "minioadmin123")
-        self.bucket_name = os.getenv("MINIO_BUCKET_NAME", "lgraph-audio")
-        self.secure = os.getenv("MINIO_SECURE", "false").lower() == "true"
+        self.endpoint = settings.MINIO_ENDPOINT
+        self.access_key = settings.MINIO_ACCESS_KEY
+        self.secret_key = settings.MINIO_SECRET_KEY
+        self.bucket_name = settings.MINIO_BUCKET_NAME
+        self.secure = settings.MINIO_SECURE
         
         # MinIO 클라이언트 초기화
         self.client = Minio(

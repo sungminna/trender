@@ -3,21 +3,17 @@ import wave
 import asyncio
 from datetime import datetime
 from typing import Optional, Tuple
-from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-
-# 환경변수 로드
-load_dotenv()
-
+from config import settings
 
 class GeminiTTSGenerator:
     """Google Gemini TTS API를 사용한 음성 생성기"""
     
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
-        if not self.api_key:
-            raise ValueError("GEMINI_API_KEY environment variable is required")
+        self.api_key = settings.GEMINI_API_KEY
+        if not self.api_key or self.api_key == "your_gemini_api_key_here":
+            raise ValueError("GEMINI_API_KEY is not configured in your .env file or environment variables")
         
         self.client = genai.Client(api_key=self.api_key)
         self.model_name = "gemini-2.5-flash-preview-tts"

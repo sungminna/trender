@@ -5,11 +5,12 @@ from sqlalchemy.sql import func
 from datetime import datetime
 import enum
 import os
+from config import settings
 
 # Database URL from environment
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/lgraph")
+DATABASE_URL = settings.DATABASE_URL.replace("asyncpg", "psycopg2")
 
-engine = create_engine(DATABASE_URL.replace("asyncpg", "psycopg2"))
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
