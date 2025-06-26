@@ -6,8 +6,10 @@ from database import engine, PodcastTask, AgentResult, TaskStatus, AgentType, TT
 from agents.super_agent import supervisor
 from langchain_core.messages import convert_to_messages
 from tts import get_tts_generator
+from utils.minio_client import get_minio_client
 import json
 import traceback
+import tempfile
 
 # Celery 앱 설정
 celery_app = Celery(
@@ -168,17 +170,17 @@ def process_podcast_task(self, task_id: int, user_request: str):
                     db.refresh(tts_result)  # ID 가져오기
                     tts_result_id = tts_result.id
                     
-                    # TTS ID가 있으므로 이제 파일 경로 생성 가능
-                    audio_file_path, audio_file_name = _generate_audio_file_path(tts_result_id, task_id, user_request)
+                    # TTS ID가 있으므로 이제 MinIO 객체명 생성 가능
+                    object_name = _generate_audio_object_name(tts_result_id, task_id, user_request)
                     
-                    # 파일 경로 업데이트
-                    tts_result.audio_file_path = audio_file_path
-                    tts_result.audio_file_name = audio_file_name
+                    # MinIO 객체명 업데이트 (파일 경로는 MinIO URL로 설정)
+                    tts_result.audio_file_path = f"minio://{os.getenv('MINIO_BUCKET_NAME', 'lgraph-audio')}/{object_name}"
+                    tts_result.audio_file_name = object_name
                     db.commit()
                     
                     print(f"🎙️ TTS 스크립트 저장 완료 (ID: {tts_result_id})")
                     print(f"   - 스크립트 길이: {len(cleaned_script)} 문자")
-                    print(f"   - 예정 음원 파일: {audio_file_name}")
+                    print(f"   - 예정 MinIO 객체명: {object_name}")
                     print(f"   - 파일명 형식: tts_id_주제_task_id.wav")
                     
                 except Exception as tts_save_error:
@@ -331,8 +333,8 @@ def _extract_final_tts_script(final_messages: list) -> str:
     return script_content
 
 
-def _generate_audio_file_path(tts_id: int, task_id: int, user_request: str) -> tuple:
-    """음원 파일 경로와 파일명을 생성합니다. 형식: tts_id_주제_task_id.wav"""
+def _generate_audio_object_name(tts_id: int, task_id: int, user_request: str) -> str:
+    """MinIO 객체명을 생성합니다. 형식: tts_id_주제_task_id.wav"""
     # 사용자 요청에서 안전한 파일명 생성 (주제 부분)
     safe_request = "".join(c for c in user_request[:30] if c.isalnum() or c in (' ', '-', '_')).rstrip()
     safe_request = safe_request.replace(' ', '_')
@@ -341,14 +343,10 @@ def _generate_audio_file_path(tts_id: int, task_id: int, user_request: str) -> t
     if not safe_request:
         safe_request = "podcast"
     
-    # 파일명 생성: tts_id_주제_task_id.wav
-    filename = f"{tts_id}_{safe_request}_{task_id}.wav"
+    # 객체명 생성: tts_id_주제_task_id.wav
+    object_name = f"{tts_id}_{safe_request}_{task_id}.wav"
     
-    # 파일 저장 경로 (환경변수로 설정 가능)
-    audio_base_dir = os.getenv("AUDIO_STORAGE_PATH", "/app/audio_files")
-    file_path = os.path.join(audio_base_dir, filename)
-    
-    return file_path, filename
+    return object_name
 
 
 @celery_app.task(bind=True)
@@ -372,52 +370,73 @@ def generate_tts_audio(self, tts_result_id: int):
             
             print(f"🎙️ TTS 음원 생성 시작... (TTS Result ID: {tts_result_id})")
             print(f"   - 스크립트 길이: {len(tts_result.script_content)} 문자")
-            print(f"   - 출력 파일: {tts_result.audio_file_name}")
-            
-            # 음원 파일 디렉토리 생성
-            os.makedirs(os.path.dirname(tts_result.audio_file_path), exist_ok=True)
+            print(f"   - MinIO 객체명: {tts_result.audio_file_name}")
             
             # TTS 생성기 인스턴스 가져오기
             tts_generator = get_tts_generator()
             
-            # 단일 화자 음성 생성 (기본 설정)
-            generation_result = tts_generator.generate_single_speaker_audio(
-                text=tts_result.script_content,
-                output_path=tts_result.audio_file_path,
-                voice_name="Kore"  # 한국어에 적합한 목소리
-            )
+            # MinIO 클라이언트 가져오기
+            minio_client = get_minio_client()
             
-            if generation_result["success"]:
-                # 성공 시 데이터베이스 업데이트
-                tts_result.is_audio_generated = "true"
-                tts_result.tts_status = TTSStatus.COMPLETED
-                tts_result.audio_generated_at = datetime.utcnow()
-                
-                # 파일 정보 업데이트
-                file_info = generation_result["file_info"]
-                tts_result.audio_file_size = file_info["file_size"]
-                tts_result.audio_duration = file_info["duration"]
-                
-                db.commit()
-                
-                print(f"✅ TTS 음원 생성 완료!")
-                print(f"   - 파일 경로: {tts_result.audio_file_path}")
-                print(f"   - 파일 크기: {file_info['file_size']:,} bytes")
-                print(f"   - 재생 시간: {file_info['duration']} 초")
-                
-                return {
-                    "status": "completed", 
-                    "tts_result_id": tts_result_id,
-                    "audio_file_path": tts_result.audio_file_path,
-                    "file_info": file_info
-                }
-            else:
-                # 실패 시 에러 상태로 업데이트
-                tts_result.tts_status = TTSStatus.FAILED
-                tts_result.error_message = generation_result["error"]
-                db.commit()
-                
-                raise Exception(generation_result["error"])
+            # 임시 파일에 음성 생성
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_file_path = temp_file.name
+            
+            try:
+                # 단일 화자 음성 생성 (임시 파일에)
+                generation_result = tts_generator.generate_single_speaker_audio(
+                    text=tts_result.script_content,
+                    output_path=temp_file_path,
+                    voice_name="Kore"  # 한국어에 적합한 목소리
+                )
+            
+                if generation_result["success"]:
+                    # TTS 생성 성공 시 MinIO에 업로드
+                    upload_result = minio_client.upload_file(
+                        object_name=tts_result.audio_file_name,
+                        file_path=temp_file_path,
+                        content_type="audio/wav"
+                    )
+                    
+                    if upload_result["success"]:
+                        # MinIO 업로드 성공 시 데이터베이스 업데이트
+                        tts_result.is_audio_generated = "true"
+                        tts_result.tts_status = TTSStatus.COMPLETED
+                        tts_result.audio_generated_at = datetime.utcnow()
+                        
+                        # 파일 정보 업데이트
+                        file_info = generation_result["file_info"]
+                        tts_result.audio_file_size = file_info["file_size"]
+                        tts_result.audio_duration = file_info["duration"]
+                        
+                        db.commit()
+                        
+                        print(f"✅ TTS 음원 생성 및 MinIO 업로드 완료!")
+                        print(f"   - MinIO 객체명: {tts_result.audio_file_name}")
+                        print(f"   - 파일 크기: {file_info['file_size']:,} bytes")
+                        print(f"   - 재생 시간: {file_info['duration']} 초")
+                        
+                        return {
+                            "status": "completed", 
+                            "tts_result_id": tts_result_id,
+                            "object_name": tts_result.audio_file_name,
+                            "minio_path": tts_result.audio_file_path,
+                            "file_info": file_info
+                        }
+                    else:
+                        # MinIO 업로드 실패
+                        raise Exception(f"MinIO 업로드 실패: {upload_result['error']}")
+                else:
+                    # TTS 생성 실패
+                    raise Exception(generation_result["error"])
+                    
+            finally:
+                # 임시 파일 정리
+                try:
+                    os.unlink(temp_file_path)
+                    print(f"🗑️ 임시 파일 삭제: {temp_file_path}")
+                except Exception as cleanup_error:
+                    print(f"⚠️ 임시 파일 삭제 실패: {cleanup_error}")
                 
         except Exception as e:
             # 에러 발생 시 롤백 후 상태 업데이트

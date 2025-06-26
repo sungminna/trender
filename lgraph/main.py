@@ -1,9 +1,11 @@
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime
 import os
+import io
 
 from database import get_db, create_tables, PodcastTask, AgentResult, TaskStatus, TTSResult
 from schemas import (
@@ -15,6 +17,7 @@ from schemas import (
 )
 from celery_app import process_podcast_task, generate_tts_audio, celery_app
 from tts import get_tts_generator
+from utils.minio_client import get_minio_client
 
 # FastAPI 앱 생성
 app = FastAPI(
@@ -321,6 +324,199 @@ async def get_system_stats(db: Session = Depends(get_db)):
         "audio_generated_count": audio_generated_count,
         "audio_pending_count": audio_pending_count,
         "celery_active_tasks": len(celery_app.control.inspect().active() or {})
+    }
+
+
+# ==========================================
+# 🎵 오디오 스트리밍 API 엔드포인트
+# ==========================================
+
+@app.get("/podcast/audio/{tts_id}/stream")
+async def stream_audio(
+    tts_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    TTS 결과의 오디오를 스트리밍으로 제공합니다.
+    
+    스트리밍 방식:
+    - MinIO에서 직접 스트리밍
+    - 브라우저 호환성을 위한 Range Request 지원
+    - Content-Type: audio/wav
+    """
+    # TTS 결과 확인
+    tts_result = db.query(TTSResult).filter(TTSResult.id == tts_id).first()
+    if not tts_result:
+        raise HTTPException(status_code=404, detail="TTS result not found")
+    
+    if tts_result.is_audio_generated != "true":
+        raise HTTPException(status_code=404, detail="Audio not yet generated")
+    
+    try:
+        # MinIO 클라이언트에서 오디오 스트림 가져오기
+        minio_client = get_minio_client()
+        audio_stream = minio_client.get_object_stream(tts_result.audio_file_name)
+        
+        # 스트리밍 응답 생성
+        def iterfile():
+            try:
+                while True:
+                    chunk = audio_stream.read(8192)  # 8KB 청크
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                audio_stream.close()
+        
+        return StreamingResponse(
+            iterfile(),
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": f'inline; filename="{tts_result.audio_file_name}"',
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "public, max-age=3600"  # 1시간 캐시
+            }
+        )
+        
+    except Exception as e:
+        print(f"❌ 오디오 스트리밍 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail="Audio streaming failed")
+
+
+@app.get("/podcast/audio/{tts_id}/download")
+async def download_audio(
+    tts_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    TTS 결과의 오디오를 다운로드용으로 제공합니다.
+    스트리밍과 달리 강제 다운로드를 유도합니다.
+    """
+    # TTS 결과 확인
+    tts_result = db.query(TTSResult).filter(TTSResult.id == tts_id).first()
+    if not tts_result:
+        raise HTTPException(status_code=404, detail="TTS result not found")
+    
+    if tts_result.is_audio_generated != "true":
+        raise HTTPException(status_code=404, detail="Audio not yet generated")
+    
+    try:
+        # MinIO 클라이언트에서 오디오 스트림 가져오기
+        minio_client = get_minio_client()
+        audio_stream = minio_client.get_object_stream(tts_result.audio_file_name)
+        
+        # 다운로드용 스트리밍 응답 생성
+        def iterfile():
+            try:
+                while True:
+                    chunk = audio_stream.read(8192)  # 8KB 청크
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                audio_stream.close()
+        
+        return StreamingResponse(
+            iterfile(),
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": f'attachment; filename="{tts_result.audio_file_name}"'
+            }
+        )
+        
+    except Exception as e:
+        print(f"❌ 오디오 다운로드 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail="Audio download failed")
+
+
+@app.get("/podcast/audio/{tts_id}/presigned-url")
+async def get_audio_presigned_url(
+    tts_id: int,
+    expires_hours: int = 1,
+    db: Session = Depends(get_db)
+):
+    """
+    TTS 결과의 오디오에 대한 미리 서명된 URL을 생성합니다.
+    
+    사용 사례:
+    - 클라이언트 측에서 직접 오디오 접근
+    - CDN 캐싱을 통한 성능 최적화
+    - 모바일 앱에서의 오디오 재생
+    """
+    # TTS 결과 확인
+    tts_result = db.query(TTSResult).filter(TTSResult.id == tts_id).first()
+    if not tts_result:
+        raise HTTPException(status_code=404, detail="TTS result not found")
+    
+    if tts_result.is_audio_generated != "true":
+        raise HTTPException(status_code=404, detail="Audio not yet generated")
+    
+    try:
+        from datetime import timedelta
+        
+        # MinIO 클라이언트에서 미리 서명된 URL 생성
+        minio_client = get_minio_client()
+        presigned_url = minio_client.generate_presigned_url(
+            object_name=tts_result.audio_file_name,
+            expires=timedelta(hours=expires_hours)
+        )
+        
+        if not presigned_url:
+            raise HTTPException(status_code=500, detail="Failed to generate presigned URL")
+        
+        return {
+            "tts_id": tts_id,
+            "presigned_url": presigned_url,
+            "expires_in_hours": expires_hours,
+            "audio_file_name": tts_result.audio_file_name,
+            "file_size": tts_result.audio_file_size,
+            "duration": tts_result.audio_duration,
+            "generated_at": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"❌ Presigned URL 생성 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail="Presigned URL generation failed")
+
+
+@app.get("/podcast/audio/list")
+async def list_available_audio(
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """
+    사용 가능한 오디오 파일 목록을 반환합니다.
+    스트리밍/다운로드 링크와 함께 제공됩니다.
+    """
+    # 오디오가 생성된 TTS 결과만 조회
+    tts_results = db.query(TTSResult).filter(
+        TTSResult.is_audio_generated == "true"
+    ).offset(skip).limit(limit).all()
+    
+    audio_list = []
+    for tts_result in tts_results:
+        audio_list.append({
+            "tts_id": tts_result.id,
+            "task_id": tts_result.task_id,
+            "user_request": tts_result.user_request,
+            "audio_file_name": tts_result.audio_file_name,
+            "file_size": tts_result.audio_file_size,
+            "duration": tts_result.audio_duration,
+            "generated_at": tts_result.audio_generated_at.isoformat() if tts_result.audio_generated_at else None,
+            "stream_url": f"/podcast/audio/{tts_result.id}/stream",
+            "download_url": f"/podcast/audio/{tts_result.id}/download",
+            "presigned_url_endpoint": f"/podcast/audio/{tts_result.id}/presigned-url"
+        })
+    
+    return {
+        "total_count": len(audio_list),
+        "audio_files": audio_list,
+        "pagination": {
+            "skip": skip,
+            "limit": limit,
+            "has_more": len(audio_list) == limit
+        }
     }
 
 
