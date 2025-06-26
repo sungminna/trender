@@ -20,7 +20,7 @@ def create_story_narrative_agent():
     """
     
     return create_react_agent(
-        model="openai:gpt-4.1",
+        model="openai:gpt-4.1-mini",
         tools=[
             # 현재는 별도 도구 없음 - 리서치 결과를 바탕으로 한국어 팟캐스트 내러티브 생성
         ],

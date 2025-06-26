@@ -28,8 +28,8 @@ The final answer **MUST** be exactly what the TTS Agent returns—no metadata, n
 • Purpose: Transform the narrative into a TTS-ready script by injecting director prompts (tone, pace, emotion) **only where helpful**.  
 • Output: Pass through the **raw** script emitted by the TTS Agent verbatim—including all voice-directive lines in whatever syntax that agent chooses—then stop. The script will end with `[TTS_SCRIPT_COMPLETE]`.  
 • Voice Directive Guidelines (model-agnostic):  
-  ‣ Provide short, natural-language instructions that specify tone, pace, or emotion (end with a colon).  
-  ‣ Ensure directives are compatible with most TTS engines and placed **only where they improve delivery**.  
+  ‣ Provide short, natural-language instructions that specify tone, pace, or emotion if provided in tts agent.  
+  ‣ Ensure directives are compatible with TTS engines that is used in tts agent and placed **only where they improve delivery**.  
 • Quality: 100 % content preservation, valid format, smooth read-aloud flow.
 
 ## WORKFLOW MANAGEMENT — GOAL-ORIENTED
