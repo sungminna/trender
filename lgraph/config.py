@@ -30,6 +30,11 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = "your_gemini_api_key_here"
     ELEVEN_API_KEY: str = "your_eleven_api_key_here"
 
+    # Langfuse 트레이싱 설정
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+
     # System
     DEBUG: bool = False
 

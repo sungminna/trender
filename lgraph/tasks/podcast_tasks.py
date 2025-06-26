@@ -5,7 +5,7 @@
 from datetime import datetime
 import os
 from database import PodcastTask, AgentResult, TaskStatus, TTSResult, TTSStatus, HLSStatus
-from agents.super_agent import supervisor
+from agents.super_agent import run_podcast_pipeline_with_tracing
 from langchain_core.messages import convert_to_messages
 from .celery_config import celery_app
 from .utils import (
@@ -22,7 +22,7 @@ import traceback
 
 @celery_app.task(bind=True)
 def process_podcast_task(self, task_id: int, user_request: str):
-    """팟캐스트 생성 작업을 처리하는 Celery 태스크"""
+    """팟캐스트 생성 작업을 처리하는 Celery 태스크 (Langfuse 트레이싱 포함)"""
     with next(get_db()) as db:
         try:
             # 작업 상태를 PROCESSING으로 업데이트
@@ -40,7 +40,7 @@ def process_podcast_task(self, task_id: int, user_request: str):
             final_messages = []
             raw_final_script = ""  # 멀티 에이전트 최종 TTS 스크립트
             
-            # 슈퍼바이저 실행
+            # Langfuse 트레이싱과 함께 슈퍼바이저 실행
             print(f"🎯 Korean Podcast Production Pipeline 시작... (Task ID: {task_id})")
             
             # 입력 메시지 저장 (모든 에이전트가 공유)
@@ -49,16 +49,10 @@ def process_podcast_task(self, task_id: int, user_request: str):
                 "timestamp": datetime.utcnow().isoformat()
             }
             
-            for chunk in supervisor.stream(
-                {
-                    "messages": [
-                        {
-                            "role": "user", 
-                            "content": user_request
-                        }
-                    ]
-                },
-                subgraphs=True,
+            # Langfuse 트레이싱과 함께 멀티 에이전트 파이프라인 실행
+            for chunk in run_podcast_pipeline_with_tracing(
+                user_request=user_request,
+                trace_name=f"Podcast Production - Task {task_id}"
             ):
                 # 각 에이전트의 결과를 배치에 추가
                 if isinstance(chunk, tuple):

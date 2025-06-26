@@ -7,6 +7,9 @@ from google import genai
 from google.genai import types
 from config import settings
 
+# Langfuse 트레이싱 import
+from langfuse import observe, get_client
+
 class GeminiTTSGenerator:
     """Google Gemini TTS API를 사용한 음성 생성기"""
     
@@ -46,6 +49,7 @@ class GeminiTTSGenerator:
         except Exception as e:
             raise Exception(f"WAV 파일 저장 실패: {str(e)}")
     
+    @observe(name="gemini-tts-single-speaker", as_type="generation")
     def generate_single_speaker_audio(
         self, 
         text: str, 
@@ -86,23 +90,46 @@ class GeminiTTSGenerator:
             print(f"   - 파일 크기: {file_info['file_size']:,} bytes")
             print(f"   - 재생 시간: {file_info['duration']} 초")
             
-            return {
+            result = {
                 "success": True,
                 "file_path": output_path,
                 "file_info": file_info,
                 "voice_used": voice,
-                "generated_at": datetime.utcnow().isoformat()
+                "generated_at": datetime.utcnow().isoformat(),
+                # Langfuse를 위한 메타데이터
+                "model": self.model_name,
+                "input_metadata": {
+                    "text": text[:100] + "..." if len(text) > 100 else text,
+                    "voice": voice,
+                    "text_length": len(text)
+                },
+                "usage_details": {
+                    "audio_bytes": len(audio_data),
+                    "file_size": file_info['file_size'],
+                    "duration_seconds": file_info['duration']
+                }
             }
+            
+            return result
             
         except Exception as e:
             error_msg = f"Gemini TTS 음성 생성 실패: {str(e)}"
             print(f"❌ {error_msg}")
-            return {
+            
+            result = {
                 "success": False,
                 "error": error_msg,
-                "file_path": output_path
+                "file_path": output_path,
+                "error_details": {
+                    "text_length": len(text) if text else 0,
+                    "voice": voice_name or self.default_voice,
+                    "model": self.model_name
+                }
             }
+            
+            return result
     
+    @observe(name="gemini-tts-multi-speaker", as_type="generation")
     def generate_multi_speaker_audio(
         self, 
         text: str, 
@@ -149,26 +176,51 @@ class GeminiTTSGenerator:
             
             print(f"✅ 다중 화자 음성 생성 완료: {output_path}")
             
-            return {
+            result = {
                 "success": True,
                 "file_path": output_path,
                 "file_info": file_info,
                 "speakers_used": [config['speaker'] for config in speaker_configs],
-                "generated_at": datetime.utcnow().isoformat()
+                "generated_at": datetime.utcnow().isoformat(),
+                # Langfuse를 위한 메타데이터
+                "model": self.model_name,
+                "input_metadata": {
+                    "text": text[:100] + "..." if len(text) > 100 else text,
+                    "speaker_configs": speaker_configs,
+                    "speaker_count": len(speaker_configs),
+                    "text_length": len(text)
+                },
+                "usage_details": {
+                    "audio_bytes": len(audio_data),
+                    "file_size": file_info['file_size'],
+                    "duration_seconds": file_info['duration'],
+                    "speaker_count": len(speaker_configs)
+                }
             }
+            
+            return result
             
         except Exception as e:
             error_msg = f"Gemini TTS 다중 화자 음성 생성 실패: {str(e)}"
             print(f"❌ {error_msg}")
-            return {
+            
+            result = {
                 "success": False,
                 "error": error_msg,
-                "file_path": output_path
+                "file_path": output_path,
+                "error_details": {
+                    "text_length": len(text) if text else 0,
+                    "speaker_configs": speaker_configs,
+                    "model": self.model_name
+                }
             }
+            
+            return result
     
+    @observe(name="gemini-tts-get-voices")
     def get_available_voices(self) -> list:
         """사용 가능한 음성 목록을 반환합니다."""
-        return [
+        voices = [
             {"name": "Zephyr", "style": "Bright"},
             {"name": "Puck", "style": "Upbeat"},
             {"name": "Charon", "style": "Informative"},
@@ -200,6 +252,8 @@ class GeminiTTSGenerator:
             {"name": "Sadaltager", "style": "Knowledgeable"},
             {"name": "Sulafat", "style": "Warm"}
         ]
+        
+        return voices
 
 
 # 전역 인스턴스

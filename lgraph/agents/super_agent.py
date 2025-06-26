@@ -9,8 +9,29 @@ from .story_narrative_agent import create_story_narrative_agent
 from .tts_agent import create_tts_agent
 from utils.prompt_loader import get_prompt, prompt_loader
 from utils.message_formatter import stream_and_print
+from config import settings
 
 load_dotenv()
+
+# Langfuse 연동 (환경변수가 설정된 경우에만)
+langfuse_handler = None
+if settings.LANGFUSE_PUBLIC_KEY and settings.LANGFUSE_SECRET_KEY:
+    try:
+        from langfuse.langchain import CallbackHandler
+        import os
+        
+        # Langfuse 환경변수 설정
+        os.environ["LANGFUSE_PUBLIC_KEY"] = settings.LANGFUSE_PUBLIC_KEY
+        os.environ["LANGFUSE_SECRET_KEY"] = settings.LANGFUSE_SECRET_KEY
+        os.environ["LANGFUSE_HOST"] = settings.LANGFUSE_HOST
+        
+        langfuse_handler = CallbackHandler()
+        print("✅ Langfuse 트레이싱 활성화됨")
+    except ImportError:
+        print("⚠️ Langfuse 패키지가 설치되지 않았습니다. 트레이싱 없이 계속 진행합니다.")
+        langfuse_handler = None
+else:
+    print("⚠️ Langfuse 환경변수가 설정되지 않았습니다. 트레이싱 없이 계속 진행합니다.")
 
 
 def pretty_print_message(message, indent=False):
@@ -87,6 +108,40 @@ def create_podcast_supervisor():
     return supervisor
 
 
+def run_podcast_pipeline_with_tracing(user_request: str, trace_name: str = None):
+    """
+    Langfuse 트레이싱과 함께 팟캐스트 파이프라인 실행
+    
+    Args:
+        user_request: 사용자 요청
+        trace_name: 트레이스 이름 (선택사항)
+    
+    Returns:
+        실행 결과 제너레이터
+    """
+    # 트레이싱 설정
+    config = {}
+    if langfuse_handler:
+        config["callbacks"] = [langfuse_handler]
+        if trace_name:
+            config["run_name"] = trace_name
+    
+    # 슈퍼바이저 실행
+    for chunk in supervisor.stream(
+        {
+            "messages": [
+                {
+                    "role": "user", 
+                    "content": user_request
+                }
+            ]
+        },
+        config=config,
+        subgraphs=True,
+    ):
+        yield chunk
+
+
 def reload_supervisor():
     """
     프롬프트 업데이트 시 슈퍼바이저 재로드
@@ -113,7 +168,7 @@ if __name__ == "__main__":
     """
     테스트 실행부
     - 샘플 요청으로 전체 파이프라인 테스트
-    - 서브그래프 스트리밍으로 실시간 진행 상황 모니터링
+    - Langfuse 트레이싱 활성화
     """
     test_request = """
     아이폰과 갤럭시의 기술적 비교
@@ -123,16 +178,10 @@ if __name__ == "__main__":
     print("=" * 20)
     
     try:
-        for chunk in supervisor.stream(
-            {
-                "messages": [
-                    {
-                        "role": "user", 
-                        "content": test_request
-                    }
-                ]
-            },
-            subgraphs=True,
+        # Langfuse 트레이싱과 함께 실행
+        for chunk in run_podcast_pipeline_with_tracing(
+            user_request=test_request,
+            trace_name="Korean Podcast Pipeline Test"
         ):
             pretty_print_messages(chunk, last_message=True)
     except Exception as e:
