@@ -6,8 +6,19 @@ import time
 
 class PromptLoader:
     """
-    프롬프트 파일을 동적으로 로드하고 관리하는 클래스
-    운영 중에도 프롬프트 파일을 업데이트하면 자동으로 반영됩니다.
+    동적 프롬프트 로딩 및 캐싱 시스템
+    
+    Features:
+    - 파일 시스템 기반 프롬프트 관리 (prompts/*.md)
+    - 파일 변경 감지를 통한 자동 리로드
+    - 메모리 캐싱으로 성능 최적화
+    - 운영 중 프롬프트 업데이트 지원
+    
+    Directory Structure:
+    - prompts/research_agent.md
+    - prompts/story_narrative_agent.md
+    - prompts/tts_gemini_agent.md
+    - prompts/super_agent.md
     """
     
     def __init__(self, prompts_dir: str = "prompts"):
@@ -15,18 +26,17 @@ class PromptLoader:
         self._cache: Dict[str, str] = {}
         self._file_timestamps: Dict[str, float] = {}
         
-        # prompts 디렉토리가 없으면 생성
+        # prompts 디렉토리 자동 생성
         self.prompts_dir.mkdir(exist_ok=True)
     
     def _get_file_path(self, prompt_name: str) -> Path:
-        """프롬프트 파일 경로를 반환합니다."""
-        # .md 확장자가 없으면 추가
+        """프롬프트 파일 경로 생성 (.md 확장자 자동 추가)"""
         if not prompt_name.endswith('.md'):
             prompt_name += '.md'
         return self.prompts_dir / prompt_name
     
     def _should_reload(self, prompt_name: str) -> bool:
-        """파일이 수정되었는지 확인합니다."""
+        """파일 변경 감지를 통한 리로드 필요성 판단"""
         file_path = self._get_file_path(prompt_name)
         
         if not file_path.exists():
@@ -39,14 +49,18 @@ class PromptLoader:
     
     def load_prompt(self, prompt_name: str, force_reload: bool = False) -> Optional[str]:
         """
-        프롬프트를 로드합니다.
+        프롬프트 로딩 및 캐싱
         
         Args:
             prompt_name: 프롬프트 파일명 (확장자 제외)
-            force_reload: 강제로 파일을 다시 읽을지 여부
+            force_reload: 캐시 무시하고 강제 리로드
             
         Returns:
-            프롬프트 내용 또는 None (파일이 없는 경우)
+            프롬프트 내용 (파일이 없으면 None)
+            
+        Caching Strategy:
+        - 파일 변경 시간 기반 자동 갱신
+        - 메모리 캐시로 성능 최적화
         """
         file_path = self._get_file_path(prompt_name)
         
@@ -54,16 +68,15 @@ class PromptLoader:
             print(f"Warning: Prompt file '{file_path}' not found")
             return None
         
-        # 캐시된 내용이 있고 파일이 수정되지 않았으면 캐시 반환
+        # 캐시 유효성 검사
         if not force_reload and prompt_name in self._cache and not self._should_reload(prompt_name):
             return self._cache[prompt_name]
         
         try:
-            # 파일 읽기
+            # 파일 읽기 및 캐시 업데이트
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
             
-            # 캐시 업데이트
             self._cache[prompt_name] = content
             self._file_timestamps[prompt_name] = os.path.getmtime(file_path)
             
@@ -75,29 +88,29 @@ class PromptLoader:
             return None
     
     def reload_all(self):
-        """모든 캐시된 프롬프트를 다시 로드합니다."""
+        """모든 캐시된 프롬프트 강제 리로드"""
         for prompt_name in list(self._cache.keys()):
             self.load_prompt(prompt_name, force_reload=True)
     
     def list_available_prompts(self) -> list:
-        """사용 가능한 프롬프트 파일 목록을 반환합니다."""
+        """사용 가능한 프롬프트 파일 목록 반환"""
         if not self.prompts_dir.exists():
             return []
         
         return [f.stem for f in self.prompts_dir.glob("*.md")]
 
 
-# 전역 인스턴스
+# 전역 인스턴스 (싱글톤 패턴)
 prompt_loader = PromptLoader()
 
 
 def get_prompt(prompt_name: str, force_reload: bool = False) -> str:
     """
-    프롬프트를 가져오는 편의 함수
+    프롬프트 로딩 편의 함수
     
     Args:
         prompt_name: 프롬프트 파일명 (확장자 제외)
-        force_reload: 강제로 파일을 다시 읽을지 여부
+        force_reload: 캐시 무시하고 강제 리로드
         
     Returns:
         프롬프트 내용 (파일이 없으면 빈 문자열)

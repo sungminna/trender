@@ -1,5 +1,8 @@
 """
-Podcast Task 관련 비즈니스 로직을 처리하는 서비스 모듈
+Podcast Task 비즈니스 로직 서비스
+- 팟캐스트 생성 작업의 CRUD 및 상태 관리
+- Celery 백그라운드 작업 연동
+- 멀티 에이전트 파이프라인 결과 처리
 """
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -10,7 +13,14 @@ from celery_app import celery_app
 from tasks.podcast_tasks import process_podcast_task
 
 def create_podcast_task(db: Session, request: PodcastRequestCreate) -> PodcastTask:
-    """새로운 팟캐스트 작업을 생성하고 백그라운드 처리를 시작합니다."""
+    """
+    새로운 팟캐스트 생성 작업 생성 및 백그라운드 처리 시작
+    
+    Flow:
+    1. DB에 PENDING 상태 작업 생성
+    2. Celery를 통한 멀티 에이전트 파이프라인 비동기 실행
+    3. 생성된 작업 정보 반환
+    """
     db_task = PodcastTask(
         user_request=request.user_request,
         status=TaskStatus.PENDING
@@ -26,28 +36,32 @@ def create_podcast_task(db: Session, request: PodcastRequestCreate) -> PodcastTa
     return db_task
 
 def get_podcast_tasks(db: Session, skip: int = 0, limit: int = 100) -> List[PodcastTask]:
-    """모든 팟캐스트 작업 목록을 조회합니다."""
+    """팟캐스트 작업 목록 페이지네이션 조회"""
     return db.query(PodcastTask).offset(skip).limit(limit).all()
 
 def get_podcast_task_by_id(db: Session, task_id: int) -> Optional[PodcastTask]:
-    """ID로 특정 팟캐스트 작업을 조회합니다."""
+    """특정 팟캐스트 작업 조회 (에이전트 결과 포함)"""
     return db.query(PodcastTask).filter(PodcastTask.id == task_id).first()
 
 def get_agent_results_by_task_id(db: Session, task_id: int) -> List[AgentResult]:
-    """특정 작업에 대한 모든 에이전트 실행 결과를 조회합니다."""
+    """특정 작업의 멀티 에이전트 실행 결과 조회"""
     return db.query(AgentResult).filter(AgentResult.task_id == task_id).all()
 
 def get_tts_result_by_task_id(db: Session, task_id: int) -> Optional[TTSResult]:
-    """특정 작업에 대한 TTS 결과를 조회합니다."""
+    """특정 작업의 TTS 스크립트 및 음성 생성 결과 조회"""
     return db.query(TTSResult).filter(TTSResult.task_id == task_id).first()
 
 def delete_podcast_task(db: Session, task_id: int) -> bool:
-    """ID로 팟캐스트 작업을 삭제합니다."""
+    """
+    팟캐스트 작업 및 관련 데이터 삭제
+    - 연관된 TTS 결과 및 에이전트 결과도 함께 삭제
+    - 데이터 정합성 유지를 위한 트랜잭션 처리
+    """
     task = get_podcast_task_by_id(db, task_id)
     if not task:
         return False
     
-    # 관련 TTS 결과와 에이전트 결과도 함께 삭제
+    # 관련 데이터 연쇄 삭제
     db.query(TTSResult).filter(TTSResult.task_id == task_id).delete(synchronize_session=False)
     db.query(AgentResult).filter(AgentResult.task_id == task_id).delete(synchronize_session=False)
     db.delete(task)
@@ -55,7 +69,13 @@ def delete_podcast_task(db: Session, task_id: int) -> bool:
     return True
 
 def get_system_stats(db: Session) -> dict:
-    """시스템 전체 통계를 계산합니다."""
+    """
+    시스템 전체 통계 계산
+    - 작업 상태별 집계
+    - 에이전트 실행 통계
+    - TTS 생성 현황
+    - Celery 워커 상태
+    """
     total_tasks = db.query(PodcastTask).count()
     pending_tasks = db.query(PodcastTask).filter(PodcastTask.status == TaskStatus.PENDING).count()
     processing_tasks = db.query(PodcastTask).filter(PodcastTask.status == TaskStatus.PROCESSING).count()
@@ -70,7 +90,7 @@ def get_system_stats(db: Session) -> dict:
     try:
         active_celery_tasks = len(celery_app.control.inspect().active() or {})
     except Exception:
-        active_celery_tasks = -1 # Celery 연결 실패 시
+        active_celery_tasks = -1  # Celery 연결 실패 시
 
     return {
         "total_tasks": total_tasks,

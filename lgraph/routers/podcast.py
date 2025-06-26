@@ -21,7 +21,7 @@ async def create_podcast_task_endpoint(
     request: PodcastRequestCreate,
     db: Session = Depends(get_db)
 ):
-    """새로운 팟캐스트 생성 작업을 시작합니다."""
+    """팟캐스트 생성 작업 시작 - 멀티 에이전트 파이프라인 실행"""
     return podcast_service.create_podcast_task(db, request)
 
 @router.get("/tasks", response_model=List[PodcastTaskSummary])
@@ -30,7 +30,7 @@ async def list_podcast_tasks_endpoint(
     limit: int = 100,
     db: Session = Depends(get_db)
 ):
-    """모든 팟캐스트 작업 목록을 반환합니다."""
+    """전체 팟캐스트 작업 목록 조회 (페이지네이션 지원)"""
     tasks = podcast_service.get_podcast_tasks(db, skip=skip, limit=limit)
     return tasks
 
@@ -39,7 +39,7 @@ async def get_podcast_task_endpoint(
     task_id: int,
     db: Session = Depends(get_db)
 ):
-    """특정 팟캐스트 작업의 상세 정보를 반환합니다."""
+    """특정 팟캐스트 작업 상세 정보 조회 (에이전트 실행 결과 포함)"""
     task = podcast_service.get_podcast_task_by_id(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -50,7 +50,7 @@ async def get_task_status_endpoint(
     task_id: int,
     db: Session = Depends(get_db)
 ):
-    """작업의 현재 상태를 반환합니다."""
+    """작업 진행 상태 및 실행 시간 정보 조회"""
     task = podcast_service.get_podcast_task_by_id(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -68,7 +68,7 @@ async def get_task_agent_results_endpoint(
     task_id: int,
     db: Session = Depends(get_db)
 ):
-    """특정 작업의 모든 에이전트 실행 결과를 반환합니다."""
+    """특정 작업의 멀티 에이전트 실행 결과 상세 조회"""
     task = podcast_service.get_podcast_task_by_id(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -85,7 +85,7 @@ async def get_task_tts_result_endpoint(
     task_id: int,
     db: Session = Depends(get_db)
 ):
-    """특정 작업의 TTS 결과를 반환합니다."""
+    """특정 작업의 TTS 스크립트 및 음성 생성 결과 조회"""
     task = podcast_service.get_podcast_task_by_id(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -100,7 +100,7 @@ async def delete_podcast_task_endpoint(
     task_id: int,
     db: Session = Depends(get_db)
 ):
-    """팟캐스트 작업을 삭제합니다."""
+    """팟캐스트 작업 및 관련 데이터 삭제 (TTS, HLS 결과 포함)"""
     success = podcast_service.delete_podcast_task(db, task_id)
     if not success:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -108,6 +108,6 @@ async def delete_podcast_task_endpoint(
 
 @router.get("/stats")
 async def get_system_stats_endpoint(db: Session = Depends(get_db)):
-    """시스템 통계를 반환합니다."""
+    """시스템 전체 통계 조회 (작업 상태별 집계, Celery 워커 상태 포함)"""
     stats = podcast_service.get_system_stats(db)
     return stats 

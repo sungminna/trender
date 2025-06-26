@@ -10,10 +10,25 @@ load_dotenv()
 
 
 def create_research_agent():
-    """Research Agent를 생성합니다. 프롬프트는 파일에서 동적으로 로드됩니다."""
+    """
+    Research Agent 생성
+    
+    역할:
+    - 사용자 요청 주제에 대한 포괄적 정보 수집
+    - 다양한 검색 도구를 활용한 신뢰성 있는 데이터 확보
+    - 수집된 정보의 구조화 및 분석
+    
+    Tools:
+    - WebSearch: 일반 웹 검색
+    - NewsSearch: 최신 뉴스 검색  
+    - NamuSearch: 나무위키 한국어 정보 검색
+    
+    Returns:
+        LangGraph ReactAgent instance
+    """
     research_prompt = get_prompt("research_agent")
     
-    # 슈퍼바이저 패턴에 맞게 프롬프트 수정
+    # 슈퍼바이저 연동을 위한 완료 신호 추가
     enhanced_prompt = research_prompt + """
     
     IMPORTANT: 리서치 작업 완료 후 반드시 응답 마지막에 '[RESEARCH_COMPLETE]' 태그를 추가하세요.
@@ -37,8 +52,8 @@ def create_research_agent():
 
 def reload_research_agent():
     """
-    프롬프트를 다시 로드하여 Research Agent를 재생성합니다.
-    서비스 운영 중 프롬프트 업데이트 시 호출하세요.
+    Research Agent 프롬프트 재로드
+    - 서비스 운영 중 프롬프트 업데이트 적용
     """
     global research_agent
     print("Reloading research agent with updated prompt...")
@@ -48,15 +63,15 @@ def reload_research_agent():
 
 
 def get_available_prompts():
-    """사용 가능한 프롬프트 목록을 반환합니다."""
+    """사용 가능한 프롬프트 목록 반환"""
     return prompt_loader.list_available_prompts()
 
 
 # Research Agent 인스턴스 생성
 research_agent = create_research_agent()
 
-# 테스트 실행
 if __name__ == "__main__":
+    """테스트 실행"""
     stream_and_print(
         research_agent,
         [{"role": "user", "content": "이란 전쟁 중 미국의 역할"}]

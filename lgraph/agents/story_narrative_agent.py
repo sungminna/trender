@@ -9,10 +9,24 @@ load_dotenv()
 
 
 def create_story_narrative_agent():
-    """Korean Story Narrative Agent를 생성합니다. 프롬프트는 파일에서 동적으로 로드됩니다."""
+    """
+    Korean Story Narrative Agent 생성
+    
+    역할:
+    - 리서치 결과를 바탕으로 한국어 팟캐스트 내러티브 구성
+    - 청취자 친화적인 스토리텔링 구조 생성
+    - 20분 분량의 매력적인 팟캐스트 스크립트 작성
+    
+    특징:
+    - 별도 외부 도구 없이 언어 모델 기반 내러티브 생성
+    - 한국어 팟캐스트 특성을 고려한 구성
+    
+    Returns:
+        LangGraph ReactAgent instance
+    """
     story_narrative_prompt = get_prompt("story_narrative_agent")
     
-    # 슈퍼바이저 패턴에 맞게 프롬프트 수정
+    # 슈퍼바이저 연동을 위한 완료 신호 추가
     enhanced_prompt = story_narrative_prompt + """
     
     IMPORTANT: 내러티브 작업 완료 후 반드시 응답 마지막에 '[NARRATIVE_COMPLETE]' 태그를 추가하세요.
@@ -21,9 +35,7 @@ def create_story_narrative_agent():
     
     return create_react_agent(
         model="openai:gpt-4.1-mini",
-        tools=[
-            # 현재는 별도 도구 없음 - 리서치 결과를 바탕으로 한국어 팟캐스트 내러티브 생성
-        ],
+        tools=[],  # 내러티브 생성은 언어 모델만으로 처리
         prompt=enhanced_prompt,
         name="story_narrative_agent",
     )
@@ -31,8 +43,8 @@ def create_story_narrative_agent():
 
 def reload_story_narrative_agent():
     """
-    프롬프트를 다시 로드하여 Korean Podcast Story Narrative Agent를 재생성합니다.
-    서비스 운영 중 프롬프트 업데이트 시 호출하세요.
+    Story Narrative Agent 프롬프트 재로드
+    - 서비스 운영 중 프롬프트 업데이트 적용
     """
     global story_narrative_agent
     print("Reloading Korean story narrative agent with updated prompt...")
@@ -42,7 +54,7 @@ def reload_story_narrative_agent():
 
 
 def get_available_prompts():
-    """사용 가능한 프롬프트 목록을 반환합니다."""
+    """사용 가능한 프롬프트 목록 반환"""
     return prompt_loader.list_available_prompts()
 
 

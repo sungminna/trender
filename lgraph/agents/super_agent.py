@@ -14,7 +14,7 @@ load_dotenv()
 
 
 def pretty_print_message(message, indent=False):
-    """메시지를 예쁘게 출력하는 헬퍼 함수"""
+    """메시지 출력 포맷팅 헬퍼 함수"""
     pretty_message = message.pretty_repr(html=True)
     if not indent:
         print(pretty_message)
@@ -25,7 +25,7 @@ def pretty_print_message(message, indent=False):
 
 
 def pretty_print_messages(update, last_message=False):
-    """업데이트 메시지들을 예쁘게 출력하는 헬퍼 함수"""
+    """에이전트 업데이트 메시지 출력 헬퍼 함수"""
     is_subgraph = False
     if isinstance(update, tuple):
         ns, update = update
@@ -56,18 +56,26 @@ def pretty_print_messages(update, last_message=False):
 
 
 def create_podcast_supervisor():
-    """Korean Podcast Production Supervisor Agent를 생성합니다. 프롬프트는 파일에서 동적으로 로드됩니다."""
+    """
+    한국어 팟캐스트 생성을 위한 멀티 에이전트 슈퍼바이저 생성
     
-    # 하위 에이전트들 생성
+    Architecture:
+    1. Research Agent: 주제 관련 정보 수집 및 분석
+    2. Story Narrative Agent: 수집된 정보를 바탕으로 팟캐스트 스크립트 생성
+    3. TTS Agent: 생성된 스크립트를 TTS에 최적화
+    
+    Returns:
+        LangGraph supervisor instance
+    """
+    # 하위 에이전트 인스턴스 생성
     research_agent = create_research_agent()
     story_narrative_agent = create_story_narrative_agent()
     tts_agent = create_tts_agent()
     
-    # 슈퍼바이저 프롬프트 로드 (파일에서 동적으로)
+    # 슈퍼바이저 프롬프트 동적 로드
     supervisor_prompt = get_prompt("super_agent")
 
-    
-    # 슈퍼바이저 생성 (참고 코드 패턴 사용)
+    # 멀티 에이전트 슈퍼바이저 생성
     supervisor = create_supervisor(
         model=init_chat_model("openai:gpt-4.1-mini"),
         agents=[research_agent, story_narrative_agent, tts_agent],
@@ -81,9 +89,9 @@ def create_podcast_supervisor():
 
 def reload_supervisor():
     """
-    프롬프트를 다시 로드하여 Korean Podcast Production Supervisor를 재생성합니다.
-    서비스 운영 중 프롬프트 업데이트 시 호출하세요.
-    하위 에이전트들도 함께 재로드됩니다.
+    프롬프트 업데이트 시 슈퍼바이저 재로드
+    - 하위 에이전트들도 함께 재로드됨
+    - 서비스 운영 중 프롬프트 변경 적용을 위해 사용
     """
     global supervisor
     print("Reloading Korean podcast production supervisor with updated prompt...")
@@ -93,17 +101,20 @@ def reload_supervisor():
 
 
 def get_available_prompts():
-    """사용 가능한 프롬프트 목록을 반환합니다."""
+    """사용 가능한 프롬프트 파일 목록 반환"""
     return prompt_loader.list_available_prompts()
 
 
-# Korean Podcast Production Supervisor 인스턴스 생성
+# 슈퍼바이저 인스턴스 생성
 supervisor = create_podcast_supervisor()
 
 
-# 테스트 실행
 if __name__ == "__main__":
-    # 테스트용 샘플 요청
+    """
+    테스트 실행부
+    - 샘플 요청으로 전체 파이프라인 테스트
+    - 서브그래프 스트리밍으로 실시간 진행 상황 모니터링
+    """
     test_request = """
     아이폰과 갤럭시의 기술적 비교
     """
@@ -111,7 +122,6 @@ if __name__ == "__main__":
     print("🎯 Korean Podcast Production Pipeline 시작...")
     print("=" * 20)
     
-    # 스트리밍으로 실행하며 서브그래프 업데이트도 표시
     try:
         for chunk in supervisor.stream(
             {
@@ -122,14 +132,13 @@ if __name__ == "__main__":
                     }
                 ]
             },
-            subgraphs=True,  # 서브그래프 업데이트도 표시
+            subgraphs=True,
         ):
             pretty_print_messages(chunk, last_message=True)
     except Exception as e:
         print(f"❌ 실행 중 오류 발생: {str(e)}")
         print("기본 실행 모드로 전환...")
         
-        # 기본 실행 (서브그래프 없이)
         result = supervisor.invoke({
             "messages": [{"role": "user", "content": test_request}]
         })
