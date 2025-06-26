@@ -15,9 +15,10 @@ from schemas import (
     TaskStatusUpdate,
     TTSResultResponse
 )
-from celery_app import process_podcast_task, generate_tts_audio, celery_app
+from celery_app import process_podcast_task, generate_tts_audio, generate_hls_from_wav, convert_existing_wav_to_hls, celery_app
 from tts import get_tts_generator
 from utils.minio_client import get_minio_client
+from utils.hls_converter import get_hls_converter
 
 # FastAPI 앱 생성
 app = FastAPI(
@@ -222,58 +223,76 @@ async def delete_podcast_task(
     return {"message": f"Task {task_id} deleted successfully"}
 
 
-@app.post("/podcast/tts/{tts_id}/generate-audio")
-async def generate_tts_audio_endpoint(
+@app.post("/podcast/tts/{tts_id}/generate-hls")
+async def generate_hls_endpoint(
     tts_id: int,
-    voice_name: str = "Kore",
     db: Session = Depends(get_db)
 ):
-    """TTS 결과로부터 음원을 생성합니다."""
+    """TTS 결과로부터 HLS 스트리밍을 생성합니다."""
     # TTS 결과 존재 확인
     tts_result = db.query(TTSResult).filter(TTSResult.id == tts_id).first()
     if not tts_result:
         raise HTTPException(status_code=404, detail="TTS result not found")
     
-    # 이미 음원이 생성되었는지 확인
-    if tts_result.is_audio_generated == "true":
+    # 이미 HLS가 생성되었는지 확인
+    if tts_result.is_hls_generated == "true":
         return {
-            "message": "Audio already generated",
+            "message": "HLS already generated",
             "tts_id": tts_id,
-            "audio_file_name": tts_result.audio_file_name,
-            "audio_file_size": tts_result.audio_file_size,
-            "audio_duration": tts_result.audio_duration
+            "hls_folder_name": tts_result.hls_folder_name,
+            "master_playlist": tts_result.hls_master_playlist,
+            "bitrates": tts_result.hls_bitrates,
+            "total_segments": tts_result.hls_total_segments
         }
     
-    # 비동기 음원 생성 작업 시작
-    celery_task = generate_tts_audio.delay(tts_id)
+    # 비동기 HLS 변환 작업 시작
+    if tts_result.is_audio_generated == "true":
+        # WAV 파일이 이미 있으면 HLS 변환만 수행
+        celery_task = generate_hls_from_wav.delay(tts_id)
+        message = "HLS conversion started"
+    else:
+        # WAV 파일부터 생성 (완료 후 자동으로 HLS 변환)
+        celery_task = generate_tts_audio.delay(tts_id)
+        message = "Audio generation started (HLS conversion will follow automatically)"
     
     return {
-        "message": "Audio generation started",
+        "message": message,
         "tts_id": tts_id,
         "celery_task_id": celery_task.id,
         "status": "processing"
     }
 
 
-@app.get("/podcast/tts/{tts_id}/audio-status")
-async def get_tts_audio_status(
+@app.get("/podcast/tts/{tts_id}/status")
+async def get_tts_status(
     tts_id: int,
     db: Session = Depends(get_db)
 ):
-    """TTS 음원 생성 상태를 확인합니다."""
+    """TTS 및 HLS 생성 상태를 확인합니다."""
     tts_result = db.query(TTSResult).filter(TTSResult.id == tts_id).first()
     if not tts_result:
         raise HTTPException(status_code=404, detail="TTS result not found")
     
     return {
         "tts_id": tts_id,
+        # TTS 상태
         "is_audio_generated": tts_result.is_audio_generated,
-        "tts_status": tts_result.tts_status,
+        "tts_status": tts_result.tts_status.value,
         "audio_file_name": tts_result.audio_file_name,
         "audio_file_size": tts_result.audio_file_size,
         "audio_duration": tts_result.audio_duration,
-        "audio_generated_at": tts_result.audio_generated_at,
-        "error_message": tts_result.error_message
+        "audio_generated_at": tts_result.audio_generated_at.isoformat() if tts_result.audio_generated_at else None,
+        "tts_error_message": tts_result.error_message,
+        
+        # HLS 상태
+        "is_hls_generated": tts_result.is_hls_generated,
+        "hls_status": tts_result.hls_status.value,
+        "hls_folder_name": tts_result.hls_folder_name,
+        "hls_master_playlist": tts_result.hls_master_playlist,
+        "hls_bitrates": tts_result.hls_bitrates,
+        "hls_total_segments": tts_result.hls_total_segments,
+        "hls_generated_at": tts_result.hls_generated_at.isoformat() if tts_result.hls_generated_at else None,
+        "hls_error_message": tts_result.hls_error_message
     }
 
 
@@ -328,194 +347,231 @@ async def get_system_stats(db: Session = Depends(get_db)):
 
 
 # ==========================================
-# 🎵 오디오 스트리밍 API 엔드포인트
+# 🎬 HLS 스트리밍 API 엔드포인트
 # ==========================================
 
-@app.get("/podcast/audio/{tts_id}/stream")
-async def stream_audio(
+@app.get("/podcast/hls/{tts_id}/master.m3u8")
+async def get_hls_master_playlist(
     tts_id: int,
     db: Session = Depends(get_db)
 ):
     """
-    TTS 결과의 오디오를 스트리밍으로 제공합니다.
-    
-    스트리밍 방식:
-    - MinIO에서 직접 스트리밍
-    - 브라우저 호환성을 위한 Range Request 지원
-    - Content-Type: audio/wav
+    HLS Master Playlist를 반환합니다.
+    클라이언트가 적응형 스트리밍을 시작할 수 있습니다.
     """
     # TTS 결과 확인
     tts_result = db.query(TTSResult).filter(TTSResult.id == tts_id).first()
     if not tts_result:
         raise HTTPException(status_code=404, detail="TTS result not found")
     
-    if tts_result.is_audio_generated != "true":
-        raise HTTPException(status_code=404, detail="Audio not yet generated")
+    if tts_result.is_hls_generated != "true":
+        raise HTTPException(status_code=404, detail="HLS not yet generated")
     
     try:
-        # MinIO 클라이언트에서 오디오 스트림 가져오기
+        # MinIO에서 Master Playlist 가져오기
         minio_client = get_minio_client()
-        audio_stream = minio_client.get_object_stream(tts_result.audio_file_name)
+        playlist_stream = minio_client.get_object_stream(tts_result.hls_master_playlist)
         
         # 스트리밍 응답 생성
         def iterfile():
             try:
                 while True:
-                    chunk = audio_stream.read(8192)  # 8KB 청크
+                    chunk = playlist_stream.read(8192)
                     if not chunk:
                         break
                     yield chunk
             finally:
-                audio_stream.close()
+                playlist_stream.close()
         
         return StreamingResponse(
             iterfile(),
-            media_type="audio/wav",
+            media_type="application/vnd.apple.mpegurl",
             headers={
-                "Content-Disposition": f'inline; filename="{tts_result.audio_file_name}"',
-                "Accept-Ranges": "bytes",
-                "Cache-Control": "public, max-age=3600"  # 1시간 캐시
+                "Cache-Control": "public, max-age=300",  # 5분 캐시
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*"
             }
         )
         
     except Exception as e:
-        print(f"❌ 오디오 스트리밍 실패: {str(e)}")
-        raise HTTPException(status_code=500, detail="Audio streaming failed")
+        print(f"❌ HLS Master Playlist 제공 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail="HLS master playlist failed")
 
 
-@app.get("/podcast/audio/{tts_id}/download")
-async def download_audio(
+@app.get("/podcast/hls/{tts_id}/{bitrate}k/playlist.m3u8")
+async def get_hls_bitrate_playlist(
     tts_id: int,
+    bitrate: int,
     db: Session = Depends(get_db)
 ):
     """
-    TTS 결과의 오디오를 다운로드용으로 제공합니다.
-    스트리밍과 달리 강제 다운로드를 유도합니다.
+    특정 비트레이트의 HLS Playlist를 반환합니다.
     """
     # TTS 결과 확인
     tts_result = db.query(TTSResult).filter(TTSResult.id == tts_id).first()
     if not tts_result:
         raise HTTPException(status_code=404, detail="TTS result not found")
     
-    if tts_result.is_audio_generated != "true":
-        raise HTTPException(status_code=404, detail="Audio not yet generated")
+    if tts_result.is_hls_generated != "true":
+        raise HTTPException(status_code=404, detail="HLS not yet generated")
+    
+    # 요청된 비트레이트가 사용 가능한지 확인
+    if bitrate not in tts_result.hls_bitrates:
+        raise HTTPException(status_code=404, detail=f"Bitrate {bitrate}k not available")
     
     try:
-        # MinIO 클라이언트에서 오디오 스트림 가져오기
+        # MinIO에서 비트레이트별 Playlist 가져오기
+        playlist_object_name = f"{tts_result.hls_folder_name}/{bitrate}k/playlist.m3u8"
         minio_client = get_minio_client()
-        audio_stream = minio_client.get_object_stream(tts_result.audio_file_name)
+        playlist_stream = minio_client.get_object_stream(playlist_object_name)
         
-        # 다운로드용 스트리밍 응답 생성
+        # 스트리밍 응답 생성
         def iterfile():
             try:
                 while True:
-                    chunk = audio_stream.read(8192)  # 8KB 청크
+                    chunk = playlist_stream.read(8192)
                     if not chunk:
                         break
                     yield chunk
             finally:
-                audio_stream.close()
+                playlist_stream.close()
         
         return StreamingResponse(
             iterfile(),
-            media_type="audio/wav",
+            media_type="application/vnd.apple.mpegurl",
             headers={
-                "Content-Disposition": f'attachment; filename="{tts_result.audio_file_name}"'
+                "Cache-Control": "public, max-age=300",  # 5분 캐시
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*"
             }
         )
         
     except Exception as e:
-        print(f"❌ 오디오 다운로드 실패: {str(e)}")
-        raise HTTPException(status_code=500, detail="Audio download failed")
+        print(f"❌ HLS Bitrate Playlist 제공 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail="HLS bitrate playlist failed")
 
 
-@app.get("/podcast/audio/{tts_id}/presigned-url")
-async def get_audio_presigned_url(
+@app.get("/podcast/hls/{tts_id}/{bitrate}k/{segment_name}")
+async def get_hls_segment(
     tts_id: int,
-    expires_hours: int = 1,
+    bitrate: int,
+    segment_name: str,
     db: Session = Depends(get_db)
 ):
     """
-    TTS 결과의 오디오에 대한 미리 서명된 URL을 생성합니다.
-    
-    사용 사례:
-    - 클라이언트 측에서 직접 오디오 접근
-    - CDN 캐싱을 통한 성능 최적화
-    - 모바일 앱에서의 오디오 재생
+    HLS 세그먼트 파일을 반환합니다.
     """
     # TTS 결과 확인
     tts_result = db.query(TTSResult).filter(TTSResult.id == tts_id).first()
     if not tts_result:
         raise HTTPException(status_code=404, detail="TTS result not found")
     
-    if tts_result.is_audio_generated != "true":
-        raise HTTPException(status_code=404, detail="Audio not yet generated")
+    if tts_result.is_hls_generated != "true":
+        raise HTTPException(status_code=404, detail="HLS not yet generated")
+    
+    # 세그먼트 파일명 검증 (.ts 파일만 허용)
+    if not segment_name.endswith('.ts'):
+        raise HTTPException(status_code=400, detail="Invalid segment file")
     
     try:
-        from datetime import timedelta
-        
-        # MinIO 클라이언트에서 미리 서명된 URL 생성
+        # MinIO에서 세그먼트 파일 가져오기
+        segment_object_name = f"{tts_result.hls_folder_name}/{bitrate}k/{segment_name}"
         minio_client = get_minio_client()
-        presigned_url = minio_client.generate_presigned_url(
-            object_name=tts_result.audio_file_name,
-            expires=timedelta(hours=expires_hours)
+        segment_stream = minio_client.get_object_stream(segment_object_name)
+        
+        # 스트리밍 응답 생성
+        def iterfile():
+            try:
+                while True:
+                    chunk = segment_stream.read(8192)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                segment_stream.close()
+        
+        return StreamingResponse(
+            iterfile(),
+            media_type="video/mp2t",
+            headers={
+                "Cache-Control": "public, max-age=3600",  # 1시간 캐시
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*"
+            }
         )
         
-        if not presigned_url:
-            raise HTTPException(status_code=500, detail="Failed to generate presigned URL")
-        
-        return {
-            "tts_id": tts_id,
-            "presigned_url": presigned_url,
-            "expires_in_hours": expires_hours,
-            "audio_file_name": tts_result.audio_file_name,
-            "file_size": tts_result.audio_file_size,
-            "duration": tts_result.audio_duration,
-            "generated_at": datetime.utcnow().isoformat()
-        }
-        
     except Exception as e:
-        print(f"❌ Presigned URL 생성 실패: {str(e)}")
-        raise HTTPException(status_code=500, detail="Presigned URL generation failed")
+        print(f"❌ HLS 세그먼트 제공 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail="HLS segment failed")
 
 
-@app.get("/podcast/audio/list")
-async def list_available_audio(
+@app.get("/podcast/hls/{tts_id}/info")
+async def get_hls_info(
+    tts_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    HLS 스트리밍 정보를 반환합니다.
+    """
+    # TTS 결과 확인
+    tts_result = db.query(TTSResult).filter(TTSResult.id == tts_id).first()
+    if not tts_result:
+        raise HTTPException(status_code=404, detail="TTS result not found")
+    
+    if tts_result.is_hls_generated != "true":
+        raise HTTPException(status_code=404, detail="HLS not yet generated")
+    
+    return {
+        "tts_id": tts_id,
+        "hls_status": tts_result.hls_status.value,
+        "hls_folder_name": tts_result.hls_folder_name,
+        "master_playlist_url": f"/podcast/hls/{tts_id}/master.m3u8",
+        "available_bitrates": tts_result.hls_bitrates,
+        "total_segments": tts_result.hls_total_segments,
+        "duration": tts_result.audio_duration,
+        "generated_at": tts_result.hls_generated_at.isoformat() if tts_result.hls_generated_at else None,
+        "bitrate_playlists": {
+            str(bitrate): f"/podcast/hls/{tts_id}/{bitrate}k/playlist.m3u8" 
+            for bitrate in tts_result.hls_bitrates
+        }
+    }
+
+
+@app.get("/podcast/hls/list")
+async def list_available_hls(
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db)
 ):
     """
-    사용 가능한 오디오 파일 목록을 반환합니다.
-    스트리밍/다운로드 링크와 함께 제공됩니다.
+    사용 가능한 HLS 스트리밍 목록을 반환합니다.
     """
-    # 오디오가 생성된 TTS 결과만 조회
+    # HLS가 생성된 TTS 결과만 조회
     tts_results = db.query(TTSResult).filter(
-        TTSResult.is_audio_generated == "true"
+        TTSResult.is_hls_generated == "true"
     ).offset(skip).limit(limit).all()
     
-    audio_list = []
+    hls_list = []
     for tts_result in tts_results:
-        audio_list.append({
+        hls_list.append({
             "tts_id": tts_result.id,
             "task_id": tts_result.task_id,
             "user_request": tts_result.user_request,
-            "audio_file_name": tts_result.audio_file_name,
-            "file_size": tts_result.audio_file_size,
+            "master_playlist_url": f"/podcast/hls/{tts_result.id}/master.m3u8",
+            "available_bitrates": tts_result.hls_bitrates,
+            "total_segments": tts_result.hls_total_segments,
             "duration": tts_result.audio_duration,
-            "generated_at": tts_result.audio_generated_at.isoformat() if tts_result.audio_generated_at else None,
-            "stream_url": f"/podcast/audio/{tts_result.id}/stream",
-            "download_url": f"/podcast/audio/{tts_result.id}/download",
-            "presigned_url_endpoint": f"/podcast/audio/{tts_result.id}/presigned-url"
+            "generated_at": tts_result.hls_generated_at.isoformat() if tts_result.hls_generated_at else None,
+            "info_url": f"/podcast/hls/{tts_result.id}/info"
         })
     
     return {
-        "total_count": len(audio_list),
-        "audio_files": audio_list,
+        "total_count": len(hls_list),
+        "hls_streams": hls_list,
         "pagination": {
             "skip": skip,
             "limit": limit,
-            "has_more": len(audio_list) == limit
+            "has_more": len(hls_list) == limit
         }
     }
 

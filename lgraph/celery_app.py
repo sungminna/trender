@@ -2,11 +2,12 @@ from celery import Celery
 from datetime import datetime
 import os
 from sqlalchemy.orm import sessionmaker
-from database import engine, PodcastTask, AgentResult, TaskStatus, AgentType, TTSResult, TTSStatus
+from database import engine, PodcastTask, AgentResult, TaskStatus, AgentType, TTSResult, TTSStatus, HLSStatus
 from agents.super_agent import supervisor
 from langchain_core.messages import convert_to_messages
 from tts import get_tts_generator
 from utils.minio_client import get_minio_client
+from utils.hls_converter import get_hls_converter
 import json
 import traceback
 import tempfile
@@ -162,7 +163,8 @@ def process_podcast_task(self, task_id: int, user_request: str):
                         audio_file_path="",  # 나중에 설정
                         audio_file_name="",  # 나중에 설정
                         is_audio_generated="false",
-                        tts_status=TTSStatus.PENDING  # 스크립트만 저장된 상태
+                        tts_status=TTSStatus.PENDING,  # 스크립트만 저장된 상태
+                        hls_status=HLSStatus.PENDING  # HLS 상태도 명시적으로 설정
                     )
                     
                     db.add(tts_result)
@@ -207,7 +209,7 @@ def process_podcast_task(self, task_id: int, user_request: str):
             # TTS 스크립트가 있으면 음원 생성 작업 시작
             if tts_result_id:
                 try:
-                    # 비동기 음원 생성 작업 시작
+                    # 비동기 음원 생성 작업 시작 (WAV 생성 후 자동으로 HLS 변환)
                     generate_audio_task = generate_tts_audio.delay(tts_result_id)
                     print(f"🎵 TTS 음원 생성 작업 시작됨 - TTS Result ID: {tts_result_id}, Celery Task ID: {generate_audio_task.id}")
                 except Exception as tts_task_error:
@@ -416,12 +418,20 @@ def generate_tts_audio(self, tts_result_id: int):
                         print(f"   - 파일 크기: {file_info['file_size']:,} bytes")
                         print(f"   - 재생 시간: {file_info['duration']} 초")
                         
+                        # HLS 변환 작업을 별도 태스크로 시작
+                        try:
+                            hls_task = generate_hls_from_wav.delay(tts_result_id)
+                            print(f"🎬 HLS 변환 작업 시작됨 - TTS Result ID: {tts_result_id}, Celery Task ID: {hls_task.id}")
+                        except Exception as hls_task_error:
+                            print(f"⚠️ HLS 변환 작업 시작 실패: {hls_task_error}")
+                        
                         return {
                             "status": "completed", 
                             "tts_result_id": tts_result_id,
                             "object_name": tts_result.audio_file_name,
                             "minio_path": tts_result.audio_file_path,
-                            "file_info": file_info
+                            "file_info": file_info,
+                            "hls_task_started": True
                         }
                     else:
                         # MinIO 업로드 실패
@@ -461,6 +471,128 @@ def generate_tts_audio(self, tts_result_id: int):
                 print(f"⚠️ 데이터베이스 업데이트 실패: {db_error}")
             
             raise Exception(f"TTS audio generation failed for {tts_result_id}: {error_message}")
+
+
+@celery_app.task(bind=True)
+def generate_hls_from_wav(self, tts_result_id: int):
+    """WAV 파일로부터 HLS를 생성하는 별도 Celery 태스크"""
+    with next(get_db()) as db:
+        try:
+            # TTS 결과 조회
+            tts_result = db.query(TTSResult).filter(TTSResult.id == tts_result_id).first()
+            if not tts_result:
+                raise Exception(f"TTS Result {tts_result_id} not found")
+            
+            # WAV 파일이 생성되어 있는지 확인
+            if tts_result.is_audio_generated != "true":
+                raise Exception(f"WAV 파일이 아직 생성되지 않았습니다: {tts_result_id}")
+            
+            print(f"🎬 HLS 변환 시작... (TTS Result ID: {tts_result_id})")
+            
+            # HLS 변환 실행
+            hls_result = _convert_to_hls_helper(tts_result, db)
+            
+            return {
+                "status": "completed" if hls_result["success"] else "failed",
+                "tts_result_id": tts_result_id,
+                "hls_result": hls_result
+            }
+            
+        except Exception as e:
+            error_message = str(e)
+            print(f"❌ HLS 변환 실패 (TTS Result ID: {tts_result_id}): {error_message}")
+            
+            try:
+                tts_result = db.query(TTSResult).filter(TTSResult.id == tts_result_id).first()
+                if tts_result:
+                    tts_result.hls_status = HLSStatus.FAILED
+                    tts_result.hls_error_message = f"HLS 변환 실패: {error_message}"
+                    db.commit()
+            except Exception:
+                pass
+            
+            raise Exception(f"HLS conversion failed for {tts_result_id}: {error_message}")
+
+
+def _convert_to_hls_helper(tts_result, db) -> dict:
+    """WAV 파일을 HLS로 변환하는 헬퍼 함수"""
+    try:
+        print(f"🎬 HLS 변환 시작... (TTS Result ID: {tts_result.id})")
+        
+        # HLS 상태를 PROCESSING으로 업데이트
+        tts_result.hls_status = HLSStatus.PROCESSING
+        db.commit()
+        
+        # HLS 변환기 가져오기
+        hls_converter = get_hls_converter()
+        
+        # HLS 폴더명 생성 (tts_id_hls)
+        hls_folder_name = f"hls_{tts_result.id}"
+        
+        # WAV 파일을 HLS로 변환
+        conversion_result = hls_converter.convert_wav_to_hls(
+            wav_object_name=tts_result.audio_file_name,
+            hls_folder_name=hls_folder_name,
+            bitrates=[64, 128, 320]  # 3가지 품질
+        )
+        
+        if conversion_result["success"]:
+            # HLS 변환 성공 시 데이터베이스 업데이트
+            tts_result.hls_folder_name = hls_folder_name
+            tts_result.hls_master_playlist = conversion_result["master_playlist"]
+            tts_result.hls_bitrates = conversion_result["bitrates"]
+            tts_result.hls_total_segments = conversion_result["total_segments"]
+            tts_result.is_hls_generated = "true"
+            tts_result.hls_status = HLSStatus.COMPLETED
+            tts_result.hls_generated_at = datetime.utcnow()
+            
+            db.commit()
+            
+            print(f"✅ HLS 변환 완료!")
+            print(f"   - HLS 폴더: {hls_folder_name}")
+            print(f"   - Master playlist: {conversion_result['master_playlist']}")
+            print(f"   - 비트레이트: {conversion_result['bitrates']}")
+            print(f"   - 총 세그먼트: {conversion_result['total_segments']}개")
+            
+            return {
+                "success": True,
+                "hls_folder_name": hls_folder_name,
+                "master_playlist": conversion_result["master_playlist"],
+                "bitrates": conversion_result["bitrates"],
+                "total_segments": conversion_result["total_segments"]
+            }
+        else:
+            # HLS 변환 실패
+            tts_result.hls_status = HLSStatus.FAILED
+            tts_result.hls_error_message = conversion_result["error"]
+            db.commit()
+            
+            print(f"❌ HLS 변환 실패: {conversion_result['error']}")
+            return {
+                "success": False,
+                "error": conversion_result["error"]
+            }
+            
+    except Exception as e:
+        # HLS 변환 중 예외 발생
+        error_msg = f"HLS 변환 중 예외 발생: {str(e)}"
+        print(f"❌ {error_msg}")
+        
+        try:
+            tts_result.hls_status = HLSStatus.FAILED
+            tts_result.hls_error_message = error_msg
+            db.commit()
+        except Exception:
+            pass
+        
+        return {
+            "success": False,
+            "error": error_msg
+        }
+
+
+# convert_existing_wav_to_hls는 generate_hls_from_wav와 동일한 기능이므로 별칭으로 처리
+convert_existing_wav_to_hls = generate_hls_from_wav
 
 
 def _get_agent_type(agent_name: str) -> AgentType:

@@ -36,6 +36,13 @@ class TTSStatus(enum.Enum):
     FAILED = "failed"
 
 
+class HLSStatus(enum.Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class PodcastTask(Base):
     """팟캐스트 생성 작업 전체를 관리하는 테이블"""
     __tablename__ = "podcast_tasks"
@@ -93,6 +100,16 @@ class TTSResult(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     audio_generated_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(Text, nullable=True)
+    
+    # HLS 관련 필드
+    hls_folder_name = Column(String(255), nullable=True)  # HLS 파일들이 저장된 폴더명
+    hls_master_playlist = Column(String(500), nullable=True)  # Master playlist 경로
+    hls_bitrates = Column(JSON, nullable=True)  # 사용 가능한 비트레이트 리스트
+    hls_total_segments = Column(Integer, nullable=True)  # 총 세그먼트 수
+    is_hls_generated = Column(String(10), default="false")  # HLS 생성 여부 ("true"/"false")
+    hls_status = Column(SQLEnum(HLSStatus), default=HLSStatus.PENDING)
+    hls_generated_at = Column(DateTime(timezone=True), nullable=True)
+    hls_error_message = Column(Text, nullable=True)
     
     # 관계 설정
     task = relationship("PodcastTask", back_populates="tts_results")
