@@ -15,7 +15,10 @@ from schemas import (
     TaskStatusUpdate,
     TTSResultResponse
 )
-from celery_app import process_podcast_task, generate_tts_audio, generate_hls_from_wav, convert_existing_wav_to_hls, celery_app
+from celery_app import celery_app
+from tasks.podcast_tasks import process_podcast_task
+from tasks.tts_tasks import generate_tts_audio
+from tasks.hls_tasks import generate_hls_from_wav
 from tts import get_tts_generator
 from utils.minio_client import get_minio_client
 from utils.hls_converter import get_hls_converter
