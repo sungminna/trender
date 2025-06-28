@@ -1,1 +1,6 @@
 pytest-playwright
+langfuse
+deepeval
+openai
+python-dotenv
+pandas
