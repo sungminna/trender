@@ -22,68 +22,25 @@ def init_alembic():
         
         content = content.replace(
             "sqlalchemy.url = driver://user:pass@localhost/dbname",
-            "sqlalchemy.url = postgresql://lgraph_user:lgraph_password@localhost:5432/lgraph"
+            "sqlalchemy.url = postgresql+psycopg2://lgraph_user:lgraph_password@localhost:5432/lgraph"
         )
         
         with open("alembic.ini", "w") as f:
             f.write(content)
         
-        # env.py 설정
-        env_content = '''from logging.config import fileConfig
-import os
-import sys
-from sqlalchemy import engine_from_config, pool
-from alembic import context
-
-# 현재 디렉토리를 sys.path에 추가
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from database import Base
-
-config = context.config
-
-# 환경 변수에서 DATABASE_URL 가져오기
-database_url = os.getenv("DATABASE_URL")
-if database_url:
-    database_url = database_url.replace("asyncpg", "psycopg2")
-    config.set_main_option("sqlalchemy.url", database_url)
-
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
-
-target_metadata = Base.metadata
-
-def run_migrations_offline():
-    url = config.get_main_option("sqlalchemy.url")
-    context.configure(
-        url=url,
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-    )
-    with context.begin_transaction():
-        context.run_migrations()
-
-def run_migrations_online():
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
-        with context.begin_transaction():
-            context.run_migrations()
-
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
-'''
-        
-        with open("alembic/env.py", "w") as f:
-            f.write(env_content)
+        # env.py 설정 (Base import 및 target_metadata 자동 추가)
+        env_path = Path("alembic/env.py")
+        env_content = env_path.read_text()
+        if "from database import Base" not in env_content:
+            insert_code = (
+                "import sys\n"
+                "import os\n"
+                "sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))\n"
+                "from database import Base\n"
+                "target_metadata = Base.metadata\n"
+            )
+            env_content = env_content.replace("target_metadata = None", insert_code)
+            env_path.write_text(env_content)
         
         print("✅ Alembic 초기화 완료")
         

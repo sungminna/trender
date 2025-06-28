@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON, Enum as SQLEnum, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, JSON, Enum as SQLEnum, ForeignKey, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.sql import func
@@ -14,6 +14,12 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
+
+
+class UserRole(enum.Enum):
+    """사용자 역할"""
+    USER = "user"
+    ADMIN = "admin"
 
 
 class TaskStatus(enum.Enum):
@@ -48,6 +54,28 @@ class HLSStatus(enum.Enum):
     FAILED = "failed"
 
 
+class User(Base):
+    """
+    사용자 정보 테이블
+    - JWT 토큰 기반 인증
+    - 사용자별 팟캐스트 작업 관리
+    """
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    username = Column(String(100), unique=True, index=True, nullable=False)
+    full_name = Column(String(255), nullable=True)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(SQLEnum(UserRole), default=UserRole.USER)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_login = Column(DateTime(timezone=True), nullable=True)
+    
+    # 관계: 사용자의 팟캐스트 작업들
+    podcast_tasks = relationship("PodcastTask", back_populates="user")
+
+
 class PodcastTask(Base):
     """
     팟캐스트 생성 작업 마스터 테이블
@@ -57,6 +85,7 @@ class PodcastTask(Base):
     __tablename__ = "podcast_tasks"
     
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # 사용자 외래키 추가
     user_request = Column(Text, nullable=False)  # 사용자 원본 요청
     status = Column(SQLEnum(TaskStatus), default=TaskStatus.PENDING)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -65,6 +94,8 @@ class PodcastTask(Base):
     error_message = Column(Text, nullable=True)
     final_result = Column(JSON, nullable=True)  # 전체 파이프라인 결과
     
+    # 관계: 사용자
+    user = relationship("User", back_populates="podcast_tasks")
     # 관계: 하위 에이전트 실행 결과들
     agent_results = relationship("AgentResult", back_populates="task")
     tts_results = relationship("TTSResult", back_populates="task")

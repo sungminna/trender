@@ -12,7 +12,7 @@ from schemas import PodcastRequestCreate
 from celery_app import celery_app
 from tasks.podcast_tasks import process_podcast_task
 
-def create_podcast_task(db: Session, request: PodcastRequestCreate) -> PodcastTask:
+def create_podcast_task(db: Session, request: PodcastRequestCreate, user_id: int) -> PodcastTask:
     """
     새로운 팟캐스트 생성 작업 생성 및 백그라운드 처리 시작
     
@@ -22,6 +22,7 @@ def create_podcast_task(db: Session, request: PodcastRequestCreate) -> PodcastTa
     3. 생성된 작업 정보 반환
     """
     db_task = PodcastTask(
+        user_id=user_id,
         user_request=request.user_request,
         status=TaskStatus.PENDING
     )
@@ -31,13 +32,17 @@ def create_podcast_task(db: Session, request: PodcastRequestCreate) -> PodcastTa
     
     # Celery 백그라운드 작업 시작
     celery_task = process_podcast_task.delay(db_task.id, request.user_request)
-    print(f"🎯 새로운 팟캐스트 작업 생성됨 - Task ID: {db_task.id}, Celery Task ID: {celery_task.id}")
+    print(f"🎯 새로운 팟캐스트 작업 생성됨 - User ID: {user_id}, Task ID: {db_task.id}, Celery Task ID: {celery_task.id}")
     
     return db_task
 
 def get_podcast_tasks(db: Session, skip: int = 0, limit: int = 100) -> List[PodcastTask]:
-    """팟캐스트 작업 목록 페이지네이션 조회"""
+    """팟캐스트 작업 목록 페이지네이션 조회 (전체)"""
     return db.query(PodcastTask).offset(skip).limit(limit).all()
+
+def get_podcast_tasks_by_user(db: Session, user_id: int, skip: int = 0, limit: int = 100) -> List[PodcastTask]:
+    """특정 사용자의 팟캐스트 작업 목록 조회"""
+    return db.query(PodcastTask).filter(PodcastTask.user_id == user_id).offset(skip).limit(limit).all()
 
 def get_podcast_task_by_id(db: Session, task_id: int) -> Optional[PodcastTask]:
     """특정 팟캐스트 작업 조회 (에이전트 결과 포함)"""
@@ -103,4 +108,41 @@ def get_system_stats(db: Session) -> dict:
         "audio_generated_count": audio_generated_count,
         "audio_pending_count": total_tts_results - audio_generated_count,
         "celery_active_tasks": active_celery_tasks
+    }
+
+def get_user_stats(db: Session, user_id: int) -> dict:
+    """
+    특정 사용자의 통계 계산
+    - 사용자 작업 상태별 집계
+    - 사용자의 에이전트 실행 통계
+    - 사용자의 TTS 생성 현황
+    """
+    user_tasks = db.query(PodcastTask).filter(PodcastTask.user_id == user_id)
+    
+    total_tasks = user_tasks.count()
+    pending_tasks = user_tasks.filter(PodcastTask.status == TaskStatus.PENDING).count()
+    processing_tasks = user_tasks.filter(PodcastTask.status == TaskStatus.PROCESSING).count()
+    completed_tasks = user_tasks.filter(PodcastTask.status == TaskStatus.COMPLETED).count()
+    failed_tasks = user_tasks.filter(PodcastTask.status == TaskStatus.FAILED).count()
+    
+    # 사용자의 에이전트 실행 통계
+    user_agent_results = db.query(AgentResult).join(PodcastTask).filter(PodcastTask.user_id == user_id)
+    total_agents = user_agent_results.count()
+    
+    # 사용자의 TTS 결과 통계
+    user_tts_results = db.query(TTSResult).join(PodcastTask).filter(PodcastTask.user_id == user_id)
+    total_tts_results = user_tts_results.count()
+    audio_generated_count = user_tts_results.filter(TTSResult.is_audio_generated == "true").count()
+    
+    return {
+        "user_id": user_id,
+        "total_tasks": total_tasks,
+        "pending_tasks": pending_tasks,
+        "processing_tasks": processing_tasks,
+        "completed_tasks": completed_tasks,
+        "failed_tasks": failed_tasks,
+        "total_agent_executions": total_agents,
+        "total_tts_results": total_tts_results,
+        "audio_generated_count": audio_generated_count,
+        "audio_pending_count": total_tts_results - audio_generated_count
     } 

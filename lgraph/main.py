@@ -5,7 +5,7 @@ from starlette.requests import Request
 import os
 
 from database import create_tables, engine
-from routers import podcast, tts, hls, system
+from routers import podcast, tts, hls, system, auth
 from config import settings
 from observability import setup_observability
 
@@ -36,6 +36,7 @@ async def startup_event():
 
 # API 라우터 등록
 app.include_router(system.router)
+app.include_router(auth.router)
 app.include_router(podcast.router)
 app.include_router(tts.router)
 app.include_router(hls.router)

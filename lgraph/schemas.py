@@ -1,7 +1,69 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from database import TaskStatus, AgentType, TTSStatus, HLSStatus
+from database import TaskStatus, AgentType, TTSStatus, HLSStatus, UserRole
+
+
+# User 관련 스키마
+class UserBase(BaseModel):
+    """사용자 기본 스키마"""
+    email: EmailStr
+    username: str = Field(..., min_length=3, max_length=50)
+    full_name: Optional[str] = None
+
+
+class UserCreate(UserBase):
+    """사용자 생성 스키마"""
+    password: str = Field(..., min_length=6, max_length=100)
+
+
+class UserUpdate(BaseModel):
+    """사용자 정보 수정 스키마"""
+    email: Optional[EmailStr] = None
+    username: Optional[str] = Field(None, min_length=3, max_length=50)
+    full_name: Optional[str] = None
+
+
+class UserResponse(UserBase):
+    """사용자 정보 응답 스키마"""
+    id: int
+    role: UserRole
+    is_active: bool
+    created_at: datetime
+    last_login: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class UserLogin(BaseModel):
+    """로그인 요청 스키마"""
+    username: str  # email 또는 username 허용
+    password: str
+
+
+class Token(BaseModel):
+    """JWT 토큰 응답 스키마"""
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+
+class TokenData(BaseModel):
+    """토큰 데이터 스키마"""
+    username: Optional[str] = None
+    user_id: Optional[int] = None
+
+
+class RefreshTokenRequest(BaseModel):
+    """리프레시 토큰 요청 스키마"""
+    refresh_token: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """비밀번호 변경 요청 스키마"""
+    current_password: str
+    new_password: str = Field(..., min_length=6, max_length=100)
 
 
 class PodcastRequestCreate(BaseModel):
