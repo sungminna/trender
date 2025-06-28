@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 from langgraph.prebuilt import create_react_agent
 from langchain.tools import Tool
+from langgraph.graph import StateGraph
+import inspect
 
 from tools.search_tools import web_search, news_search, namu_search
 from utils.prompt_loader import get_prompt, prompt_loader
@@ -8,6 +10,15 @@ from utils.message_formatter import stream_and_print
 
 load_dotenv()
 
+# Patch StateGraph.add_node for older langgraph versions that don't accept the `input_schema` kwarg
+_original_add_node = StateGraph.add_node  # type: ignore[attr-defined]
+if "input_schema" not in inspect.signature(_original_add_node).parameters:
+    def _add_node_compat(self, *args, **kwargs):  # type: ignore[override]
+        # Silently drop the `input_schema` argument if present
+        kwargs.pop("input_schema", None)
+        return _original_add_node(self, *args, **kwargs)
+
+    StateGraph.add_node = _add_node_compat  # type: ignore[assignment]
 
 def create_research_agent():
     """
