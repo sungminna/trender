@@ -5,7 +5,7 @@ from starlette.requests import Request
 import os
 
 from database import create_tables, engine
-from routers import podcast, tts, hls, system, auth
+from routers import podcast, tts, hls, system, auth, websocket
 from config import settings
 from observability import setup_observability
 
@@ -34,12 +34,27 @@ async def startup_event():
     create_tables()
     print("🚀 LGraph Multi-Agent System API started!")
 
+    # Start background Redis pub/sub listener to forward Celery notifications
+    async def _redis_listener():
+        async for message in broker.subscribe():
+            # Expect messages to contain user_id; simply forward as-is
+            user_id = message.get("user_id")
+            if user_id is not None:
+                try:
+                    await manager.send_personal_message(message, user_id)
+                except Exception as e:
+                    print(f"⚠️ Redis listener forwarding error: {e}")
+
+    global _redis_listener_task
+    _redis_listener_task = asyncio.create_task(_redis_listener())
+
 # API 라우터 등록
 app.include_router(system.router)
 app.include_router(auth.router)
 app.include_router(podcast.router)
 app.include_router(tts.router)
 app.include_router(hls.router)
+app.include_router(websocket.router)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -60,6 +75,25 @@ async def global_exception_handler(request: Request, exc: Exception):
             "detail": detail
         },
     )
+
+# --- Real-time WebSocket forwarding from Celery workers ------------
+import asyncio
+from utils.broker import broker
+from utils.websocket_manager import manager
+
+# Background task reference
+_redis_listener_task = None
+
+# Graceful shutdown of redis listener
+@app.on_event("shutdown")
+async def shutdown_event():
+    global _redis_listener_task
+    if _redis_listener_task:
+        _redis_listener_task.cancel()
+        try:
+            await _redis_listener_task
+        except asyncio.CancelledError:
+            pass
 
 if __name__ == "__main__":
     import uvicorn

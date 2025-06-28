@@ -10,6 +10,7 @@ from tts import get_tts_generator
 from utils.minio_client import get_minio_client
 from .celery_config import celery_app
 from .utils import get_db, handle_task_error
+from .notifications import send_tts_progress_update
 
 
 @celery_app.task(bind=True)
@@ -27,6 +28,12 @@ def generate_tts(self, task_id: int, script: str, user_request: str):
             
             task.status = TaskStatus.PROCESSING
             db.commit()
+            
+            # WebSocket을 통한 TTS 재생성 시작 알림
+            send_tts_progress_update(
+                task_id, task.user_id, "processing",
+                {"message": "새로운 TTS 결과를 생성하고 있습니다."}
+            )
 
             # 1. 새로운 TTSResult 레코드 생성
             audio_file_name = f"podcast_task_{task_id}_tts_{int(datetime.utcnow().timestamp())}.wav"
@@ -85,6 +92,21 @@ def generate_tts_audio(self, tts_result_id: int):
             tts_result.tts_status = TTSStatus.PROCESSING
             db.commit()
             
+            # 상위 작업의 사용자 ID 가져오기
+            task = db.query(PodcastTask).filter(PodcastTask.id == tts_result.task_id).first()
+            user_id = task.user_id if task else None
+            
+            # WebSocket을 통한 TTS 음원 생성 시작 알림
+            if user_id:
+                send_tts_progress_update(
+                    tts_result.task_id, user_id, "processing",
+                    {
+                        "message": "TTS 음원을 생성하고 있습니다...",
+                        "tts_result_id": tts_result_id,
+                        "script_length": len(tts_result.script_content)
+                    }
+                )
+            
             print(f"🎙️ TTS 음원 생성 시작... (TTS Result ID: {tts_result_id})")
             print(f"   - 스크립트 길이: {len(tts_result.script_content)} 문자")
             print(f"   - MinIO 객체명: {tts_result.audio_file_name}")
@@ -133,8 +155,31 @@ def generate_tts_audio(self, tts_result_id: int):
                         print(f"   - 파일 크기: {file_info['file_size']:,} bytes")
                         print(f"   - 재생 시간: {file_info['duration']} 초")
                         
+                        # WebSocket을 통한 TTS 완료 알림
+                        if user_id:
+                            send_tts_progress_update(
+                                tts_result.task_id, user_id, "completed",
+                                {
+                                    "message": "TTS 음원 생성이 완료되었습니다!",
+                                    "tts_result_id": tts_result_id,
+                                    "audio_file_name": tts_result.audio_file_name,
+                                    "file_size": file_info['file_size'],
+                                    "duration": file_info['duration']
+                                }
+                            )
+                        
                         # HLS 변환 작업을 별도 태스크로 시작
                         _start_hls_conversion_task(tts_result_id)
+                        
+                        # HLS 변환 시작 알림
+                        if user_id:
+                            send_tts_progress_update(
+                                tts_result.task_id, user_id, "hls_processing",
+                                {
+                                    "message": "HLS 스트리밍 변환을 시작합니다...",
+                                    "tts_result_id": tts_result_id
+                                }
+                            )
                         
                         return {
                             "status": "completed", 
@@ -174,6 +219,19 @@ def generate_tts_audio(self, tts_result_id: int):
                     tts_result.tts_status = TTSStatus.FAILED
                     tts_result.error_message = f"{error_info['error_message']}\n\nTraceback:\n{error_info['error_traceback']}"
                     db.commit()
+                    
+                    # 상위 작업의 사용자 ID 가져오기
+                    task = db.query(PodcastTask).filter(PodcastTask.id == tts_result.task_id).first()
+                    if task:
+                        # WebSocket을 통한 TTS 실패 알림
+                        send_tts_progress_update(
+                            tts_result.task_id, task.user_id, "failed",
+                            {
+                                "message": "TTS 음원 생성에 실패했습니다.",
+                                "error": error_info['error_message'],
+                                "tts_result_id": tts_result_id
+                            }
+                        )
             except Exception as db_error:
                 print(f"⚠️ 데이터베이스 업데이트 실패: {db_error}")
             

@@ -18,6 +18,7 @@ from .utils import (
     handle_task_error
 )
 import traceback
+from .notifications import send_agent_progress_update, update_task_status_with_websocket, send_tts_progress_update
 
 
 @celery_app.task(bind=True)
@@ -33,6 +34,12 @@ def process_podcast_task(self, task_id: int, user_request: str):
             task.status = TaskStatus.PROCESSING
             task.started_at = datetime.utcnow()
             db.commit()
+            
+            # WebSocket을 통한 실시간 상태 업데이트
+            send_agent_progress_update(
+                task_id, task.user_id, "multi_agent_pipeline", TaskStatus.PROCESSING,
+                {"message": "멀티 에이전트 팟캐스트 파이프라인을 시작합니다."}
+            )
             
             # 에이전트 실행 결과를 배치로 저장할 리스트
             agent_results_batch = []
@@ -92,6 +99,16 @@ def process_podcast_task(self, task_id: int, user_request: str):
                             agent_results_batch.append(agent_result)
                             print(f"📊 {node_name} 완료 (실행 #{execution_order})")
                             
+                            # WebSocket을 통한 에이전트 진행 상황 실시간 업데이트
+                            send_agent_progress_update(
+                                task_id, task.user_id, node_name, TaskStatus.COMPLETED,
+                                {
+                                    "execution_order": execution_order,
+                                    "execution_time": int((datetime.utcnow() - start_time).total_seconds()),
+                                    "output_messages_count": len(serializable_messages)
+                                }
+                            )
+                            
                             # 최종 메시지 수집
                             try:
                                 messages = convert_to_messages(node_update["messages"])
@@ -136,12 +153,25 @@ def process_podcast_task(self, task_id: int, user_request: str):
             task.final_result = final_result
             db.commit()
             
+            # WebSocket을 통한 최종 완료 상태 업데이트
+            update_task_status_with_websocket(
+                db, task_id, TaskStatus.COMPLETED, 
+                final_result=final_result, 
+                completed_at=task.completed_at
+            )
+            
             print(f"✅ Task {task_id} completed successfully")
             print(f"📈 Agent executions: {agent_execution_count}")
             
             # TTS 스크립트가 있으면 음원 생성 작업 시작
             if tts_result_id:
                 _start_tts_generation_task(tts_result_id)
+                
+                # TTS 작업 시작 알림 (에이전트 진행 상황으로 알림)
+                send_agent_progress_update(
+                    task_id, task.user_id, "tts_generation", TaskStatus.PROCESSING,
+                    progress_data={"message": "TTS 음원 생성 작업을 시작합니다.", "tts_result_id": tts_result_id}
+                )
             
             return {"status": "completed", "task_id": task_id, "tts_result_id": tts_result_id}
             
@@ -161,6 +191,13 @@ def process_podcast_task(self, task_id: int, user_request: str):
                     task.error_message = f"{error_info['error_message']}\n\nTraceback:\n{error_info['error_traceback']}"
                     task.completed_at = datetime.utcnow()
                     db.commit()
+                    
+                    # WebSocket을 통한 실패 상태 업데이트
+                    update_task_status_with_websocket(
+                        db, task_id, TaskStatus.FAILED, 
+                        error_message=task.error_message,
+                        completed_at=task.completed_at
+                    )
             except Exception as db_error:
                 print(f"⚠️ 데이터베이스 업데이트 실패: {db_error}")
             

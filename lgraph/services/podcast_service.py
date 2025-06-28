@@ -3,12 +3,14 @@ Podcast Task 비즈니스 로직 서비스
 - 팟캐스트 생성 작업의 CRUD 및 상태 관리
 - Celery 백그라운드 작업 연동
 - 멀티 에이전트 파이프라인 결과 처리
+- WebSocket을 통한 실시간 상태 업데이트
 """
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from typing import List, Optional
 from datetime import datetime, timedelta
 from fastapi import HTTPException, status as http_status
+import asyncio
 
 from database import PodcastTask, AgentResult, TTSResult, TaskStatus, User, UserRole, PodcastCreationLog
 from schemas import PodcastRequestCreate
@@ -16,6 +18,7 @@ from celery_app import celery_app
 from tasks.podcast_tasks import process_podcast_task
 from tasks.tts_tasks import generate_tts as generate_tts_task
 from config import settings
+from tasks.notifications import _send_task_status_update_async
 
 def _check_user_creation_limit(db: Session, user: User):
     """사용자의 일일 팟캐스트 생성 횟수를 확인하고 제한을 초과했는지 검사"""
@@ -43,7 +46,8 @@ def create_podcast_task(db: Session, request: PodcastRequestCreate, user_id: int
     2. DB에 PENDING 상태 작업 생성
     3. 생성 로그 기록
     4. Celery를 통한 멀티 에이전트 파이프라인 비동기 실행
-    5. 생성된 작업 정보 반환
+    5. WebSocket을 통한 실시간 상태 업데이트
+    6. 생성된 작업 정보 반환
     """
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -66,7 +70,10 @@ def create_podcast_task(db: Session, request: PodcastRequestCreate, user_id: int
     db.commit()
     db.refresh(db_task)
     
-    # 4. Celery 백그라운드 작업 시작
+    # 4. WebSocket을 통한 실시간 상태 업데이트
+    _send_task_status_update_async(db_task.id, user_id, TaskStatus.PENDING)
+    
+    # 5. Celery 백그라운드 작업 시작
     celery_task = process_podcast_task.delay(db_task.id, request.user_request)
     print(f"🎯 새로운 팟캐스트 작업 생성됨 - User ID: {user_id}, Task ID: {db_task.id}, Celery Task ID: {celery_task.id}")
     
@@ -119,8 +126,9 @@ def regenerate_tts_for_task(db: Session, task_id: int, user_id: int, new_script:
     Flow:
     1. 작업 및 소유권 확인
     2. 작업 상태를 'PROCESSING'으로 변경
-    3. 새로운 TTS 생성을 위한 Celery 작업 호출 (이 작업이 새 TTSResult 레코드를 생성)
-    4. 업데이트된 작업 정보 반환
+    3. WebSocket을 통한 실시간 상태 업데이트
+    4. 새로운 TTS 생성을 위한 Celery 작업 호출 (이 작업이 새 TTSResult 레코드를 생성)
+    5. 업데이트된 작업 정보 반환
     """
     task = db.query(PodcastTask).filter(PodcastTask.id == task_id, PodcastTask.user_id == user_id).first()
     if not task:
@@ -133,7 +141,11 @@ def regenerate_tts_for_task(db: Session, task_id: int, user_id: int, new_script:
     db.commit()
     db.refresh(task)
     
-    # 3. 새로운 TTS 생성을 위한 Celery 작업 호출
+    # 3. WebSocket을 통한 실시간 상태 업데이트
+    _send_task_status_update_async(task.id, user_id, TaskStatus.PROCESSING, 
+                                 additional_data={"message": "TTS 재생성 작업을 시작합니다."})
+    
+    # 4. 새로운 TTS 생성을 위한 Celery 작업 호출
     # tts_tasks.generate_tts 는 내부적으로 새로운 TTSResult 레코드를 생성해야 합니다.
     generate_tts_task.delay(task_id=task.id, script=new_script, user_request=task.user_request)
     
@@ -213,4 +225,78 @@ def get_user_stats(db: Session, user_id: int) -> dict:
         "total_tts_results": total_tts_results,
         "audio_generated_count": audio_generated_count,
         "audio_pending_count": total_tts_results - audio_generated_count
-    } 
+    }
+
+def update_task_status_with_websocket(db: Session, task_id: int, status: TaskStatus, 
+                                    error_message: Optional[str] = None,
+                                    final_result: Optional[dict] = None,
+                                    completed_at: Optional[datetime] = None):
+    """
+    데이터베이스 작업 상태 업데이트 + WebSocket 실시간 알림
+    """
+    task = db.query(PodcastTask).filter(PodcastTask.id == task_id).first()
+    if not task:
+        return False
+    
+    # 상태 업데이트
+    task.status = status
+    if error_message:
+        task.error_message = error_message
+    if final_result:
+        task.final_result = final_result
+    if completed_at:
+        task.completed_at = completed_at
+    elif status in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
+        task.completed_at = datetime.utcnow()
+    
+    if status == TaskStatus.PROCESSING and not task.started_at:
+        task.started_at = datetime.utcnow()
+    
+    db.add(task)
+    db.commit()
+    
+    # WebSocket을 통한 실시간 알림
+    additional_data = {}
+    if final_result:
+        additional_data["final_result"] = final_result
+    if task.started_at:
+        additional_data["started_at"] = task.started_at.isoformat()
+    if task.completed_at:
+        additional_data["completed_at"] = task.completed_at.isoformat()
+    
+    _send_task_status_update_async(task_id, task.user_id, status, error_message, additional_data)
+    return True
+
+def send_agent_progress_update(task_id: int, user_id: int, agent_name: str, 
+                             agent_status: TaskStatus, progress_data: Optional[dict] = None):
+    """
+    에이전트 진행 상황 WebSocket 업데이트 (Celery 작업에서 호출)
+    """
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        from utils.websocket_manager import manager
+        loop.run_until_complete(
+            manager.send_agent_progress_update(task_id, user_id, agent_name, agent_status, progress_data)
+        )
+        loop.close()
+    except Exception as e:
+        print(f"⚠️ 에이전트 진행 상황 WebSocket 전송 실패 - Task ID: {task_id}, Agent: {agent_name}, Error: {e}")
+
+def send_tts_progress_update(task_id: int, user_id: int, tts_status: str, 
+                           progress_data: Optional[dict] = None):
+    """
+    TTS 진행 상황 WebSocket 업데이트 (Celery 작업에서 호출)
+    """
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        from utils.websocket_manager import manager
+        loop.run_until_complete(
+            manager.send_tts_progress_update(task_id, user_id, tts_status, progress_data)
+        )
+        loop.close()
+    except Exception as e:
+        print(f"⚠️ TTS 진행 상황 WebSocket 전송 실패 - Task ID: {task_id}, TTS Status: {tts_status}, Error: {e}") 

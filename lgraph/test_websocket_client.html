@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LGraph WebSocket 테스트 클라이언트</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        input[type="text"], textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        
+        button:hover {
+            background-color: #0056b3;
+        }
+        
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        
+        .status.connected {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .logs {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 10px;
+            height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+        
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-radius: 3px;
+        }
+        
+        .message.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .message.success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .message.warning {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        
+        .message.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ LGraph WebSocket 테스트 클라이언트</h1>
+        
+        <div class="input-group">
+            <label for="serverUrl">서버 URL:</label>
+            <input type="text" id="serverUrl" value="ws://localhost:8000/ws/task-updates" placeholder="웹소켓 서버 URL">
+        </div>
+        
+        <div class="input-group">
+            <label for="token">JWT 액세스 토큰:</label>
+            <input type="text" id="token" placeholder="JWT 토큰을 입력하세요">
+        </div>
+        
+        <div class="input-group">
+            <button id="connectBtn" onclick="connectWebSocket()">연결</button>
+            <button id="disconnectBtn" onclick="disconnectWebSocket()" disabled>연결 해제</button>
+            <button onclick="sendPing()" id="pingBtn" disabled>Ping 전송</button>
+            <button onclick="clearLogs()">로그 지우기</button>
+        </div>
+        
+        <div id="status" class="status disconnected">연결되지 않음</div>
+        
+        <h3>📡 실시간 메시지 로그</h3>
+        <div id="logs" class="logs"></div>
+        
+        <div class="input-group">
+            <label for="podcastRequest">팟캐스트 생성 테스트:</label>
+            <textarea id="podcastRequest" rows="3" placeholder="팟캐스트 요청 내용을 입력하세요 (예: 아이폰과 갤럭시의 기술적 비교)">인공지능의 미래와 인간의 역할에 대한 10분 팟캐스트</textarea>
+            <button onclick="createPodcast()" id="createBtn" disabled>팟캐스트 생성</button>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let pingInterval = null;
+        
+        function log(message, type = 'info') {
+            const logs = document.getElementById('logs');
+            const timestamp = new Date().toLocaleTimeString();
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.textContent = `[${timestamp}] ${message}`;
+            logs.appendChild(messageDiv);
+            logs.scrollTop = logs.scrollHeight;
+        }
+        
+        function updateStatus(connected) {
+            const status = document.getElementById('status');
+            const connectBtn = document.getElementById('connectBtn');
+            const disconnectBtn = document.getElementById('disconnectBtn');
+            const pingBtn = document.getElementById('pingBtn');
+            const createBtn = document.getElementById('createBtn');
+            
+            if (connected) {
+                status.className = 'status connected';
+                status.textContent = 'WebSocket 연결됨';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                pingBtn.disabled = false;
+                createBtn.disabled = false;
+            } else {
+                status.className = 'status disconnected';
+                status.textContent = '연결되지 않음';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                pingBtn.disabled = true;
+                createBtn.disabled = true;
+            }
+        }
+        
+        function connectWebSocket() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const token = document.getElementById('token').value;
+            
+            if (!token) {
+                alert('JWT 토큰을 입력하세요.');
+                return;
+            }
+            
+            const wsUrl = `${serverUrl}?token=${encodeURIComponent(token)}`;
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = function(event) {
+                    log('WebSocket 연결 성공!', 'success');
+                    updateStatus(true);
+                    
+                    // Ping 인터벌 시작 (30초마다)
+                    pingInterval = setInterval(() => {
+                        sendPing();
+                    }, 30000);
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const message = JSON.parse(event.data);
+                        handleWebSocketMessage(message);
+                    } catch (e) {
+                        log(`JSON 파싱 오류: ${event.data}`, 'error');
+                    }
+                };
+                
+                ws.onerror = function(error) {
+                    log(`WebSocket 오류: ${error}`, 'error');
+                };
+                
+                ws.onclose = function(event) {
+                    log(`WebSocket 연결 해제 (Code: ${event.code}, Reason: ${event.reason})`, 'warning');
+                    updateStatus(false);
+                    
+                    if (pingInterval) {
+                        clearInterval(pingInterval);
+                        pingInterval = null;
+                    }
+                };
+                
+            } catch (error) {
+                log(`연결 실패: ${error.message}`, 'error');
+            }
+        }
+        
+        function disconnectWebSocket() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+        
+        function sendPing() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const pingMessage = {
+                    type: "ping",
+                    timestamp: new Date().toISOString()
+                };
+                ws.send(JSON.stringify(pingMessage));
+                log('Ping 전송', 'info');
+            }
+        }
+        
+        function handleWebSocketMessage(message) {
+            const type = message.type;
+            const timestamp = message.timestamp;
+            
+            switch(type) {
+                case 'connection_established':
+                    log(`✅ 연결 확인: ${message.message} (User ID: ${message.user_id})`, 'success');
+                    break;
+                    
+                case 'task_status_update':
+                    let statusMsg = `📋 작업 ${message.task_id} 상태: ${message.status}`;
+                    if (message.error_message) {
+                        statusMsg += ` | 오류: ${message.error_message}`;
+                        log(statusMsg, 'error');
+                    } else {
+                        log(statusMsg, 'success');
+                    }
+                    
+                    if (message.started_at) {
+                        log(`   시작시간: ${new Date(message.started_at).toLocaleString()}`, 'info');
+                    }
+                    if (message.completed_at) {
+                        log(`   완료시간: ${new Date(message.completed_at).toLocaleString()}`, 'info');
+                    }
+                    break;
+                    
+                case 'agent_progress_update':
+                    let agentMsg = `🤖 에이전트 ${message.agent_name}: ${message.agent_status}`;
+                    if (message.execution_order) {
+                        agentMsg += ` (실행 #${message.execution_order})`;
+                    }
+                    if (message.execution_time) {
+                        agentMsg += ` | 소요시간: ${message.execution_time}초`;
+                    }
+                    if (message.message) {
+                        agentMsg += ` | ${message.message}`;
+                    }
+                    log(agentMsg, 'info');
+                    break;
+                    
+                case 'tts_progress_update':
+                    let ttsMsg = `🎵 TTS/HLS 상태: ${message.tts_status}`;
+                    if (message.message) {
+                        ttsMsg += ` | ${message.message}`;
+                    }
+                    if (message.file_size && message.duration) {
+                        ttsMsg += ` | 파일크기: ${(message.file_size/1024/1024).toFixed(2)}MB, 재생시간: ${message.duration}초`;
+                    }
+                    if (message.hls_folder_name) {
+                        ttsMsg += ` | HLS 폴더: ${message.hls_folder_name}`;
+                    }
+                    if (message.total_segments) {
+                        ttsMsg += ` | 세그먼트: ${message.total_segments}개`;
+                    }
+                    if (message.bitrates) {
+                        ttsMsg += ` | 비트레이트: ${message.bitrates.join(', ')}kbps`;
+                    }
+                    
+                    const ttsType = message.tts_status.includes('failed') ? 'error' : 
+                                   message.tts_status.includes('completed') ? 'success' : 'info';
+                    log(ttsMsg, ttsType);
+                    break;
+                    
+                case 'pong':
+                    log('🏓 Pong 수신', 'info');
+                    break;
+                    
+                case 'error':
+                    log(`❌ 서버 오류: ${message.message}`, 'error');
+                    break;
+                    
+                default:
+                    log(`📨 알 수 없는 메시지 타입: ${type} | ${JSON.stringify(message)}`, 'warning');
+            }
+        }
+        
+        async function createPodcast() {
+            const request = document.getElementById('podcastRequest').value;
+            if (!request.trim()) {
+                alert('팟캐스트 요청 내용을 입력하세요.');
+                return;
+            }
+            
+            const token = document.getElementById('token').value;
+            if (!token) {
+                alert('JWT 토큰이 필요합니다.');
+                return;
+            }
+            
+            try {
+                log(`🎯 팟캐스트 생성 요청: "${request}"`, 'info');
+                
+                const response = await fetch('http://localhost:8000/podcast/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        user_request: request
+                    })
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    log(`✅ 팟캐스트 작업 생성됨 - Task ID: ${result.id}`, 'success');
+                } else {
+                    const error = await response.json();
+                    log(`❌ 팟캐스트 생성 실패: ${error.detail || response.statusText}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ 요청 실패: ${error.message}`, 'error');
+            }
+        }
+        
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+        }
+    </script>
+</body>
+</html> 

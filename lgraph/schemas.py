@@ -217,5 +217,63 @@ class HLSGenerationResponse(BaseModel):
     hls_folder_name: Optional[str] = None
     master_playlist: Optional[str] = None
 
+
+# WebSocket 관련 스키마
+class WebSocketMessage(BaseModel):
+    """WebSocket 메시지 기본 스키마"""
+    type: str
+    timestamp: str
+
+
+class TaskStatusWebSocketMessage(WebSocketMessage):
+    """작업 상태 업데이트 WebSocket 메시지"""
+    task_id: int
+    status: str
+    error_message: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    final_result: Optional[Dict[str, Any]] = None
+
+
+class AgentProgressWebSocketMessage(WebSocketMessage):
+    """에이전트 진행 상황 WebSocket 메시지"""
+    task_id: int
+    agent_name: str
+    agent_status: str
+    execution_order: Optional[int] = None
+    execution_time: Optional[int] = None
+    output_messages_count: Optional[int] = None
+    message: Optional[str] = None
+
+
+class TTSProgressWebSocketMessage(WebSocketMessage):
+    """TTS 진행 상황 WebSocket 메시지"""
+    task_id: int
+    tts_status: str
+    message: Optional[str] = None
+    tts_result_id: Optional[int] = None
+    script_length: Optional[int] = None
+    audio_file_name: Optional[str] = None
+    file_size: Optional[int] = None
+    duration: Optional[int] = None
+    error: Optional[str] = None
+
+
+class ConnectionEstablishedWebSocketMessage(WebSocketMessage):
+    """연결 성공 WebSocket 메시지"""
+    user_id: int
+    message: str
+
+
+class PingPongWebSocketMessage(WebSocketMessage):
+    """Ping/Pong WebSocket 메시지"""
+    pass
+
+
+class ErrorWebSocketMessage(WebSocketMessage):
+    """에러 WebSocket 메시지"""
+    message: str
+    error_code: Optional[str] = None
+
 # Pydantic V2 스타일로 Forward-referencing 해결
 PodcastTaskResponse.model_rebuild() 

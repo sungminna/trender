@@ -9,6 +9,7 @@
 - **음성 생성**: TTS 엔진을 통한 고품질 한국어 음성 합성
 - **스트리밍**: HLS 변환을 통한 적응형 스트리밍
 - **트레이싱**: Langfuse 연동을 통한 멀티 에이전트 실행 추적
+- **실시간 업데이트**: WebSocket을 통한 작업 진행 상황 실시간 알림
 
 ## 🏗️ 시스템 아키텍처
 
@@ -112,6 +113,74 @@ curl -X POST "http://localhost:8000/podcast/create" \
 curl "http://localhost:8000/podcast/tasks/1/status"
 ```
 
+### WebSocket 실시간 업데이트
+
+```javascript
+// JWT 토큰을 쿼리 파라미터로 전달하여 WebSocket 연결
+const token = "your_jwt_access_token";
+const ws = new WebSocket(`ws://localhost:8000/ws/task-updates?token=${token}`);
+
+ws.onopen = function(event) {
+    console.log('WebSocket 연결됨');
+    
+    // Ping/Pong으로 연결 유지
+    setInterval(() => {
+        ws.send(JSON.stringify({
+            type: "ping",
+            timestamp: new Date().toISOString()
+        }));
+    }, 30000);
+};
+
+ws.onmessage = function(event) {
+    const message = JSON.parse(event.data);
+    
+    switch(message.type) {
+        case 'connection_established':
+            console.log('연결 확인:', message.message);
+            break;
+            
+        case 'task_status_update':
+            console.log(`작업 ${message.task_id} 상태 변경: ${message.status}`);
+            if (message.error_message) {
+                console.error('오류:', message.error_message);
+            }
+            break;
+            
+        case 'agent_progress_update':
+            console.log(`에이전트 ${message.agent_name} 진행 상황: ${message.agent_status}`);
+            break;
+            
+        case 'tts_progress_update':
+            console.log(`TTS 진행 상황: ${message.tts_status}`);
+            if (message.message) {
+                console.log(message.message);
+            }
+            break;
+            
+        case 'pong':
+            console.log('Pong 수신');
+            break;
+    }
+};
+
+ws.onerror = function(error) {
+    console.error('WebSocket 오류:', error);
+};
+
+ws.onclose = function(event) {
+    console.log('WebSocket 연결 해제');
+};
+```
+
+#### WebSocket 메시지 타입
+
+- **connection_established**: 연결 성공 확인
+- **task_status_update**: 작업 상태 변경 (PENDING → PROCESSING → COMPLETED/FAILED)
+- **agent_progress_update**: 개별 에이전트 실행 진행 상황
+- **tts_progress_update**: TTS 음성 생성 진행 상황
+- **ping/pong**: 연결 유지를 위한 하트비트
+
 ### 트레이싱 결과 확인
 
 Langfuse 대시보드에서 실시간 멀티 에이전트 실행 상황을 모니터링할 수 있습니다.
@@ -151,6 +220,26 @@ lgraph/
 - **Celery Flower**: 작업 큐 모니터링  
 - **FastAPI Docs**: API 문서 (`/docs`)
 - **시스템 통계**: `/podcast/stats` 엔드포인트
+- **WebSocket 테스트**: `test_websocket_client.html` 파일로 실시간 업데이트 테스트
+
+## 🧪 WebSocket 테스트 방법
+
+1. **서버 실행**: FastAPI 서버와 Celery 워커를 실행합니다.
+2. **브라우저에서 테스트 클라이언트 열기**:
+   ```bash
+   # 브라우저에서 직접 파일 열기
+   open lgraph/test_websocket_client.html
+   ```
+3. **JWT 토큰 획득**: `/auth/login` 엔드포인트로 로그인하여 액세스 토큰을 획득합니다.
+4. **WebSocket 연결**: 테스트 클라이언트에서 토큰을 입력하고 연결 버튼을 클릭합니다.
+5. **팟캐스트 생성**: 연결된 상태에서 팟캐스트 생성 버튼을 클릭하여 실시간 업데이트를 확인합니다.
+
+### 실시간 업데이트 확인 항목
+- ✅ 작업 생성 시 PENDING → PROCESSING 상태 변경
+- ✅ 각 에이전트 실행 진행 상황 (Research → Story Narrative → TTS)
+- ✅ TTS 음원 생성 진행 상황
+- ✅ HLS 변환 진행 상황
+- ✅ 최종 완료 또는 오류 상태
 
 ## �� 라이선스
 
