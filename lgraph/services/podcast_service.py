@@ -4,33 +4,69 @@ Podcast Task 비즈니스 로직 서비스
 - Celery 백그라운드 작업 연동
 - 멀티 에이전트 파이프라인 결과 처리
 """
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 from typing import List, Optional
+from datetime import datetime, timedelta
+from fastapi import HTTPException, status as http_status
 
-from database import PodcastTask, AgentResult, TTSResult, TaskStatus
+from database import PodcastTask, AgentResult, TTSResult, TaskStatus, User, UserRole, PodcastCreationLog
 from schemas import PodcastRequestCreate
 from celery_app import celery_app
 from tasks.podcast_tasks import process_podcast_task
+from tasks.tts_tasks import generate_tts as generate_tts_task
+from config import settings
+
+def _check_user_creation_limit(db: Session, user: User):
+    """사용자의 일일 팟캐스트 생성 횟수를 확인하고 제한을 초과했는지 검사"""
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    count = db.query(PodcastCreationLog).filter(
+        PodcastCreationLog.user_id == user.id,
+        PodcastCreationLog.created_at >= today_start
+    ).count()
+
+    limit = settings.DAILY_LIMIT_PAID if user.role == UserRole.PAID else settings.DAILY_LIMIT_FREE
+
+    if count >= limit:
+        raise HTTPException(
+            status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"일일 생성 횟수 제한({limit}회)을 초과했습니다. 유료 플랜 업그레이드를 고려해보세요."
+        )
 
 def create_podcast_task(db: Session, request: PodcastRequestCreate, user_id: int) -> PodcastTask:
     """
     새로운 팟캐스트 생성 작업 생성 및 백그라운드 처리 시작
     
     Flow:
-    1. DB에 PENDING 상태 작업 생성
-    2. Celery를 통한 멀티 에이전트 파이프라인 비동기 실행
-    3. 생성된 작업 정보 반환
+    1. 사용자 생성 횟수 제한 확인
+    2. DB에 PENDING 상태 작업 생성
+    3. 생성 로그 기록
+    4. Celery를 통한 멀티 에이전트 파이프라인 비동기 실행
+    5. 생성된 작업 정보 반환
     """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # 1. 사용자 생성 횟수 제한 확인
+    _check_user_creation_limit(db, user)
+
+    # 2. DB에 PENDING 상태 작업 생성
     db_task = PodcastTask(
         user_id=user_id,
         user_request=request.user_request,
         status=TaskStatus.PENDING
     )
     db.add(db_task)
+    
+    # 3. 생성 로그 기록
+    db.add(PodcastCreationLog(user_id=user_id))
+    
     db.commit()
     db.refresh(db_task)
     
-    # Celery 백그라운드 작업 시작
+    # 4. Celery 백그라운드 작업 시작
     celery_task = process_podcast_task.delay(db_task.id, request.user_request)
     print(f"🎯 새로운 팟캐스트 작업 생성됨 - User ID: {user_id}, Task ID: {db_task.id}, Celery Task ID: {celery_task.id}")
     
@@ -42,11 +78,14 @@ def get_podcast_tasks(db: Session, skip: int = 0, limit: int = 100) -> List[Podc
 
 def get_podcast_tasks_by_user(db: Session, user_id: int, skip: int = 0, limit: int = 100) -> List[PodcastTask]:
     """특정 사용자의 팟캐스트 작업 목록 조회"""
-    return db.query(PodcastTask).filter(PodcastTask.user_id == user_id).offset(skip).limit(limit).all()
+    return db.query(PodcastTask).filter(PodcastTask.user_id == user_id).order_by(PodcastTask.id.desc()).offset(skip).limit(limit).all()
 
 def get_podcast_task_by_id(db: Session, task_id: int) -> Optional[PodcastTask]:
-    """특정 팟캐스트 작업 조회 (에이전트 결과 포함)"""
-    return db.query(PodcastTask).filter(PodcastTask.id == task_id).first()
+    """특정 팟캐스트 작업 조회 (에이전트 및 TTS 결과 전체 포함)"""
+    return db.query(PodcastTask).options(
+        joinedload(PodcastTask.agent_results),
+        joinedload(PodcastTask.tts_results)
+    ).filter(PodcastTask.id == task_id).first()
 
 def get_agent_results_by_task_id(db: Session, task_id: int) -> List[AgentResult]:
     """특정 작업의 멀티 에이전트 실행 결과 조회"""
@@ -72,6 +111,35 @@ def delete_podcast_task(db: Session, task_id: int) -> bool:
     db.delete(task)
     db.commit()
     return True
+
+def regenerate_tts_for_task(db: Session, task_id: int, user_id: int, new_script: str) -> PodcastTask:
+    """
+    사용자가 수정한 스크립트로 새로운 버전의 TTS 음성을 생성합니다.
+    
+    Flow:
+    1. 작업 및 소유권 확인
+    2. 작업 상태를 'PROCESSING'으로 변경
+    3. 새로운 TTS 생성을 위한 Celery 작업 호출 (이 작업이 새 TTSResult 레코드를 생성)
+    4. 업데이트된 작업 정보 반환
+    """
+    task = db.query(PodcastTask).filter(PodcastTask.id == task_id, PodcastTask.user_id == user_id).first()
+    if not task:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="해당 작업을 찾을 수 없거나 접근 권한이 없습니다.")
+
+    # 2. 작업 상태를 다시 '처리중'으로 변경
+    task.status = TaskStatus.PROCESSING
+    
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    
+    # 3. 새로운 TTS 생성을 위한 Celery 작업 호출
+    # tts_tasks.generate_tts 는 내부적으로 새로운 TTSResult 레코드를 생성해야 합니다.
+    generate_tts_task.delay(task_id=task.id, script=new_script, user_request=task.user_request)
+    
+    print(f"🔁 새로운 TTS 버전 생성 작업 시작됨 - Task ID: {task.id}")
+    
+    return task
 
 def get_system_stats(db: Session) -> dict:
     """

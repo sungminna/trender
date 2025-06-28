@@ -89,41 +89,6 @@ class AgentResultResponse(BaseModel):
         from_attributes = True
 
 
-class PodcastTaskResponse(BaseModel):
-    """팟캐스트 작업 상세 정보 응답 스키마"""
-    id: int
-    user_request: str
-    status: TaskStatus
-    created_at: datetime
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
-    final_result: Optional[Dict[str, Any]] = None
-    agent_results: List[AgentResultResponse] = []
-
-    class Config:
-        from_attributes = True
-
-
-class PodcastTaskSummary(BaseModel):
-    """팟캐스트 작업 목록용 요약 스키마"""
-    id: int
-    user_request: str
-    status: TaskStatus
-    created_at: datetime
-    completed_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-
-class TaskStatusUpdate(BaseModel):
-    """작업 상태 업데이트 스키마"""
-    status: TaskStatus
-    error_message: Optional[str] = None
-    final_result: Optional[Dict[str, Any]] = None
-
-
 class TTSResultResponse(BaseModel):
     """TTS 및 HLS 결과 통합 응답 스키마"""
     id: int
@@ -155,6 +120,58 @@ class TTSResultResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class PodcastTaskResponse(BaseModel):
+    """팟캐스트 작업 상세 정보 응답 스키마"""
+    id: int
+    user_request: str
+    status: TaskStatus
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    final_result: Optional[Dict[str, Any]] = None
+    agent_results: List[AgentResultResponse] = []
+    tts_results: List[TTSResultResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+class PodcastTaskSummary(BaseModel):
+    """팟캐스트 작업 목록용 요약 스키마"""
+    id: int
+    user_request: str
+    status: TaskStatus
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+    
+    # HLS 관련 필드
+    hls_folder_name: Optional[str] = None
+    hls_master_playlist: Optional[str] = None
+    hls_bitrates: Optional[List[int]] = None
+    hls_total_segments: Optional[int] = None
+    is_hls_generated: str = "false"
+    hls_status: HLSStatus
+    hls_generated_at: Optional[datetime] = None
+    hls_error_message: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class PodcastRegenerateRequest(BaseModel):
+    """팟캐스트 대본 수정 및 재성성 요청 스키마"""
+    script: str = Field(..., min_length=1, description="사용자가 수정한 최종 팟캐스트 대본")
+
+
+class TaskStatusUpdate(BaseModel):
+    """작업 상태 업데이트 스키마"""
+    status: TaskStatus
+    error_message: Optional[str] = None
+    final_result: Optional[Dict[str, Any]] = None
 
 
 class TTSResultCreate(BaseModel):
@@ -198,4 +215,7 @@ class HLSGenerationResponse(BaseModel):
     celery_task_id: str
     status: str
     hls_folder_name: Optional[str] = None
-    master_playlist: Optional[str] = None 
+    master_playlist: Optional[str] = None
+
+# Pydantic V2 스타일로 Forward-referencing 해결
+PodcastTaskResponse.model_rebuild() 

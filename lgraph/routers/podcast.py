@@ -7,7 +7,8 @@ from schemas import (
     PodcastRequestCreate, 
     PodcastTaskResponse, 
     PodcastTaskSummary,
-    TTSResultResponse
+    TTSResultResponse,
+    PodcastRegenerateRequest
 )
 from services import podcast_service
 from utils.auth_dependencies import get_current_active_user, get_admin_user
@@ -68,6 +69,30 @@ async def get_podcast_task_endpoint(
         raise HTTPException(status_code=403, detail="Not authorized to access this task")
     
     return task
+
+@router.put("/tasks/{task_id}/regenerate", response_model=PodcastTaskResponse)
+async def regenerate_podcast_tts_endpoint(
+    task_id: int,
+    request: PodcastRegenerateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    사용자가 수정한 스크립트로 팟캐스트 음성을 다시 생성합니다.
+    
+    - 기존 TTS, HLS 결과는 삭제되고 새로 생성됩니다.
+    - 전체 에이전트 파이프라인을 재실행하지 않고, TTS 생성 단계만 실행하여 효율적입니다.
+    
+    Headers:
+        Authorization: Bearer {access_token}
+    """
+    updated_task = podcast_service.regenerate_tts_for_task(
+        db=db,
+        task_id=task_id,
+        user_id=current_user.id,
+        new_script=request.script
+    )
+    return updated_task
 
 @router.get("/tasks/{task_id}/status")
 async def get_task_status_endpoint(

@@ -5,11 +5,65 @@ TTS 음원 생성 관련 Celery 태스크들
 import os
 import tempfile
 from datetime import datetime
-from database import TTSResult, TTSStatus
+from database import TTSResult, TTSStatus, PodcastTask, TaskStatus
 from tts import get_tts_generator
 from utils.minio_client import get_minio_client
 from .celery_config import celery_app
 from .utils import get_db, handle_task_error
+
+
+@celery_app.task(bind=True)
+def generate_tts(self, task_id: int, script: str, user_request: str):
+    """
+    새로운 TTSResult를 생성하고, 실제 음원 생성을 위한 백그라운드 태스크를 시작합니다.
+    이 태스크는 팟캐스트 재성성(regeneration) 플로우에서 사용됩니다.
+    """
+    with next(get_db()) as db:
+        try:
+            # 상위 PodcastTask의 상태를 PROCESSING으로 업데이트
+            task = db.query(PodcastTask).filter(PodcastTask.id == task_id).first()
+            if not task:
+                raise Exception(f"PodcastTask {task_id} not found")
+            
+            task.status = TaskStatus.PROCESSING
+            db.commit()
+
+            # 1. 새로운 TTSResult 레코드 생성
+            audio_file_name = f"podcast_task_{task_id}_tts_{int(datetime.utcnow().timestamp())}.wav"
+            
+            new_tts_result = TTSResult(
+                task_id=task_id,
+                user_request=user_request,
+                script_content=script,
+                raw_script=script, # 원본 스크립트도 저장
+                tts_status=TTSStatus.PENDING,
+                audio_file_name=audio_file_name,
+                audio_file_path=f"audio-files/{audio_file_name}" # MinIO 경로
+            )
+            db.add(new_tts_result)
+            db.commit()
+            db.refresh(new_tts_result)
+            
+            print(f"✅ 새로운 TTS Result 레코드 생성됨 (ID: {new_tts_result.id})")
+
+            # 2. 실제 음원 생성을 위한 태스크 호출
+            generate_tts_audio.delay(new_tts_result.id)
+            
+            return {"status": "success", "tts_result_id": new_tts_result.id}
+
+        except Exception as e:
+            handle_task_error("TTS Result Creation", task_id, e)
+            # 상위 작업 상태를 FAILED로 업데이트
+            try:
+                task = db.query(PodcastTask).filter(PodcastTask.id == task_id).first()
+                if task:
+                    task.status = TaskStatus.FAILED
+                    task.error_message = f"TTS Result 생성 실패: {e}"
+                    db.commit()
+            except Exception as db_error:
+                print(f"⚠️ 작업 상태 업데이트 실패: {db_error}")
+
+            raise e
 
 
 @celery_app.task(bind=True)

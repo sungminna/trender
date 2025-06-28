@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
 
     # MinIO 오브젝트 스토리지 (오디오 파일 저장)
-    MINIO_ENDPOINT: str = "localhost:9000"
+    MINIO_ENDPOINT: str = "minio:9000"
     MINIO_ACCESS_KEY: str = "minioadmin"
     MINIO_SECRET_KEY: str = "minioadmin123"
     MINIO_BUCKET_NAME: str = "lgraph-audio"
@@ -36,10 +36,14 @@ class Settings(BaseSettings):
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"
 
     # JWT 토큰 설정
-    JWT_SECRET_KEY: str = "your-secret-key-here-change-in-production"
+    JWT_SECRET_KEY: str = "a_very_secret_key"
     JWT_ALGORITHM: str = "HS256"
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 1일
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 14 # 14일
+
+    # 팟캐스트 생성 제한
+    DAILY_LIMIT_FREE: int = 2
+    DAILY_LIMIT_PAID: int = 10
 
     # System
     DEBUG: bool = False

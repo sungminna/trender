@@ -20,6 +20,7 @@ class UserRole(enum.Enum):
     """사용자 역할"""
     USER = "user"
     ADMIN = "admin"
+    PAID = "paid"
 
 
 class TaskStatus(enum.Enum):
@@ -164,6 +165,20 @@ class TTSResult(Base):
     
     # 관계: 상위 작업
     task = relationship("PodcastTask", back_populates="tts_results")
+
+
+class PodcastCreationLog(Base):
+    """
+    사용자별 팟캐스트 생성 횟수 추적 테이블
+    - 일일 생성량 제한 기능에 사용
+    """
+    __tablename__ = "podcast_creation_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User")
 
 
 def get_db():
