@@ -4,9 +4,10 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 import os
 
-from database import create_tables
+from database import create_tables, engine
 from routers import podcast, tts, hls, system
 from config import settings
+from observability import setup_observability
 
 # FastAPI 애플리케이션 초기화
 app = FastAPI(
@@ -14,6 +15,9 @@ app = FastAPI(
     description="Korean Podcast Production System using Multi-Agent Architecture",
     version="1.0.0"
 )
+
+# Configure OpenTelemetry (traces, metrics, logs)
+setup_observability(app=app, db_engine=engine)
 
 # CORS 미들웨어 설정
 app.add_middleware(
