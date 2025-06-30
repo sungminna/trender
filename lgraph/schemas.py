@@ -145,18 +145,10 @@ class PodcastTaskSummary(BaseModel):
     user_request: str
     status: TaskStatus
     created_at: datetime
+    started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     error_message: Optional[str] = None
-    
-    # HLS 관련 필드
-    hls_folder_name: Optional[str] = None
-    hls_master_playlist: Optional[str] = None
-    hls_bitrates: Optional[List[int]] = None
-    hls_total_segments: Optional[int] = None
-    is_hls_generated: str = "false"
-    hls_status: HLSStatus
-    hls_generated_at: Optional[datetime] = None
-    hls_error_message: Optional[str] = None
+    final_result: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True

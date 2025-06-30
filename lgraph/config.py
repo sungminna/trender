@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 14 # 14일
 
     # 일일 생성 제한
-    DAILY_LIMIT_FREE: int = 10
+    DAILY_LIMIT_FREE: int = 100
     DAILY_LIMIT_PAID: int = 100
 
     # System
